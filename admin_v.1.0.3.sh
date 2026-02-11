@@ -12,11 +12,14 @@ validate_ip() {
 validate_integer() { [[ $1 =~ ^[0-9]+$ ]]; }
 
 calculate_mask() {
-    local ip_prefix=$(echo $1 | cut -d'.' -f1-2)
-    if [[ $ip_prefix == "192.168" ]]; then
-        echo "255.255.255.0"
-    elif [[ $ip_prefix == "10.0" ]]; then
+    local base=$(echo $1 | cut -d'.' -f1-2)
+    
+    if [[ $base == "10.0" ]]; then
         echo "255.0.0.0"
+    elif [[ $base == "172.16" ]]; then
+        echo "255.255.0.0"
+    elif [[ $base == "192.168" ]]; then
+        echo "255.255.255.0"
     else
         echo "255.255.255.0"
     fi
