@@ -14,6 +14,7 @@ configure_network() {
 uninstall_dhcp() {
     sudo systemctl stop dhcpd 2>/dev/null
     sudo rm -f /etc/dhcp/dhcpd.conf
+    sudo rm -f /var/lib/dhcpd/dhcpd.leases
     sudo dnf remove -y dhcp-server
 }
 
@@ -21,7 +22,7 @@ while true; do
     echo -e "\n    GESTIÓN DHCP FEDORA (Interfaz: $INTERFACE) "
     echo "1. Instalacion"
     echo "2. Verificación de Estado"
-    echo "3. Configurar Ámbito (Server + Cliente)"
+    echo "3. Configurar Ámbito (Auto-Limpieza)"
     echo "4. Monitorear Leases"
     echo "5. Desinstalar"
     echo "6. Salir"
@@ -35,6 +36,9 @@ while true; do
             read -p "IP FINAL del rango: " END
             
             if validate_ip $START && validate_ip $END; then
+                # Limpieza automática de leases viejos para evitar errores
+                sudo bash -c '> /var/lib/dhcpd/dhcpd.leases'
+                
                 configure_network $START
                 
                 NET_BASE=$(echo $START | cut -d'.' -f1-3)
@@ -54,7 +58,7 @@ EOF"
                 sudo systemctl daemon-reload
                 sudo restorecon -v /etc/dhcp/dhcpd.conf
                 sudo systemctl restart dhcpd
-                echo "[+] Server ($INTERFACE): $START | Clientes: $CLIENT_START - $END"
+                echo "[+] Limpieza hecha y DHCP activo en $INTERFACE"
             else
                 echo "[X] IPs inválidas."
             fi ;;
