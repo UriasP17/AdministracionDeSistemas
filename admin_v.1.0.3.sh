@@ -58,7 +58,8 @@ while true; do
         2)
             echo "--- Estado ---"
             systemctl is-active --quiet dhcpd && echo "Activo" || echo "Inactivo" ;;
-        
+
+        3) 
             read -p "IP Inicial (Gateway/Servidor): " START
             read -p "IP Final: " END
             
