@@ -1,17 +1,14 @@
 #!/bin/bash
 
-get_interface() {
-    ip -o link show | awk -F': ' '{print $2}' | grep -v 'lo' | head -n1
-}
+INTERFACE="enp0s8"
 
 validate_ip() {
     [[ $1 =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || return 1
 }
 
 configure_network() {
-    local interface=$(get_interface)
-    sudo nmcli device modify "$interface" ipv4.addresses "$1/24" ipv4.method manual
-    sudo nmcli device up "$interface"
+    sudo nmcli device modify "$INTERFACE" ipv4.addresses "$1/24" ipv4.method manual
+    sudo nmcli device up "$INTERFACE"
 }
 
 uninstall_dhcp() {
@@ -21,7 +18,7 @@ uninstall_dhcp() {
 }
 
 while true; do
-    echo -e "\n    GESTIÓN DHCP FEDORA "
+    echo -e "\n    GESTIÓN DHCP FEDORA (Interfaz: $INTERFACE) "
     echo "1. Instalacion"
     echo "2. Verificación de Estado"
     echo "3. Configurar Ámbito (Server + Cliente)"
@@ -52,9 +49,12 @@ subnet ${NET_BASE}.0 netmask 255.255.255.0 {
     max-lease-time 7200;
 }
 EOF"
+                sudo sed -i "s/ExecStart=.*/ExecStart=\/usr\/sbin\/dhcpd -f -cf \/etc\/dhcp\/dhcpd.conf -user dhcpd -group dhcpd --no-pid $INTERFACE/" /usr/lib/systemd/system/dhcpd.service
+                
+                sudo systemctl daemon-reload
                 sudo restorecon -v /etc/dhcp/dhcpd.conf
                 sudo systemctl restart dhcpd
-                echo "[+] Server: $START | Clientes: $CLIENT_START - $END"
+                echo "[+] Server ($INTERFACE): $START | Clientes: $CLIENT_START - $END"
             else
                 echo "[X] IPs inválidas."
             fi ;;
