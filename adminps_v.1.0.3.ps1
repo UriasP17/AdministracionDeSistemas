@@ -21,11 +21,9 @@ function Configure-Network {
     
     Write-Host "Configurando IP estática $IPAddress en interfaz '$INTERFACE'..." -ForegroundColor Yellow
     
-    # Limpiamos configuraciones viejas para evitar conflictos
     Remove-NetIPAddress -InterfaceAlias $INTERFACE -Confirm:$false -ErrorAction SilentlyContinue
     Remove-NetRoute -InterfaceAlias $INTERFACE -Confirm:$false -ErrorAction SilentlyContinue
     
-    # Asignamos la nueva IP
     New-NetIPAddress -InterfaceAlias $INTERFACE -IPAddress $IPAddress -PrefixLength 24 -ErrorAction Stop
 }
 
@@ -71,8 +69,33 @@ function Setup-DHCPScope {
         Set-DhcpServerv4OptionValue -ScopeId "$NetBase.0" -DnsServer $DNSServers
     }
   
-    # Intento de autorización
     Add-DhcpServerInDC -DnsName $env:COMPUTERNAME -IPAddress $ServerIP -ErrorAction SilentlyContinue
+}
+
+function Clear-AllLeases {
+    Write-Host "`n--- ELIMINANDO TODOS LOS LEASES (IPs ENTREGADAS) ---" -ForegroundColor Yellow
+    try {
+        $scopes = Get-DhcpServerv4Scope -ErrorAction SilentlyContinue
+        if ($scopes) {
+            foreach ($scope in $scopes) {
+                $leases = Get-DhcpServerv4Lease -ScopeId $scope.ScopeId
+                if ($leases) {
+                    foreach ($lease in $leases) {
+                        Remove-DhcpServerv4Lease -IPAddress $lease.IPAddress -Force
+                        Write-Host "Eliminado lease: $($lease.IPAddress) - $($lease.HostName)" -ForegroundColor Red
+                    }
+                } else {
+                    Write-Host "El ámbito $($scope.ScopeId) ya estaba limpio." -ForegroundColor Gray
+                }
+            }
+            Write-Host "✅ ¡Limpieza completada! Los clientes pedirán IP nueva." -ForegroundColor Green
+        } else {
+            Write-Host "[!] No hay ámbitos configurados para limpiar." -ForegroundColor Yellow
+        }
+    }
+    catch {
+        Write-Host "Error al limpiar leases: $_" -ForegroundColor Red
+    }
 }
 
 function Show-Menu {
@@ -84,8 +107,9 @@ function Show-Menu {
     Write-Host "2. Verificación de Estado (Real)"
     Write-Host "3. Configurar Ámbito DHCP + IP Estática"
     Write-Host "4. Ver Leases (Clientes Conectados)"
-    Write-Host "5. Desinstalar DHCP (Limpieza Total)"
-    Write-Host "6. Salir"
+    Write-Host "5. ELIMINAR LEASES (Resetear Clientes)" 
+    Write-Host "6. Desinstalar DHCP (Limpieza Total)"
+    Write-Host "7. Salir"
     Write-Host "==========================================" -ForegroundColor Cyan
     Write-Host ""
 }
@@ -107,7 +131,6 @@ while ($true) {
                 
                 if ($service.Status -eq "Running") {
                     Write-Host "ESTADO: ACTIVO (Running)" -ForegroundColor Green
-                    
                     Write-Host "`n--- Ámbitos Configurados ---"
                     Get-DhcpServerv4Scope | Format-Table ScopeId, Name, State, StartRange, EndRange -AutoSize
                 } else {
@@ -117,7 +140,6 @@ while ($true) {
             catch {
                 Write-Host "ESTADO: NO INSTALADO (El servicio DHCP no existe)" -ForegroundColor DarkGray
             }
-            
             Read-Host "`nPresiona Enter para volver al menú..."
         }
         
@@ -152,20 +174,15 @@ while ($true) {
             catch {
                 Write-Host "[ERROR] Algo falló al configurar: $_" -ForegroundColor Red
             }
-            
             Read-Host "`nPresiona Enter para volver al menú..."
         }
         
-                4 {
+        4 {
             Write-Host "`n------ LEASES DHCP (CLIENTES) ------" -ForegroundColor Cyan
             try {
-                # Primero buscamos si existen ámbitos creados
                 $scopes = Get-DhcpServerv4Scope -ErrorAction SilentlyContinue
-                
                 if ($scopes) {
-                    # Si hay ámbitos, pedimos los clientes de cada uno
                     $leases = $scopes | Get-DhcpServerv4Lease -ErrorAction SilentlyContinue
-                    
                     if ($leases) {
                         $leases | Format-Table IPAddress, HostName, ClientId, LeaseExpiryTime -AutoSize
                     } else {
@@ -174,35 +191,27 @@ while ($true) {
                     }
                 } else {
                     Write-Host "[!] No has creado ningún Ámbito DHCP (Opción 3)." -ForegroundColor Red
-                    Write-Host "Primero configura la red antes de buscar clientes." -ForegroundColor Yellow
                 }
             }
-            catch {
-                 Write-Host "Error al consultar DHCP: $_" -ForegroundColor Red
-            }
+            catch { Write-Host "Error al consultar DHCP: $_" -ForegroundColor Red }
             Write-Host "------------------------------------"
             Read-Host "`nPresiona Enter para volver al menú..."
         }
 
         5 {
+            Clear-AllLeases
+            Read-Host "`nPresiona Enter para volver al menú..."
+        }
+
+        6 {
             Write-Host "Desinstalando DHCP..." -ForegroundColor Yellow
             try { Get-DhcpServerv4Scope -ErrorAction SilentlyContinue | Remove-DhcpServerv4Scope -Force -ErrorAction SilentlyContinue } catch {}
-            
             Uninstall-WindowsFeature -Name DHCP -IncludeManagementTools -Restart:$false
-            
-            Write-Host "Esperando limpieza de sistema (5 seg)..." -ForegroundColor DarkGray
-            Start-Sleep -Seconds 5
-            
-            if (Get-Service dhcpserver -ErrorAction SilentlyContinue) {
-                Write-Host "[AVISO] El servicio sigue marcado para borrar. Reinicia el servidor para completar." -ForegroundColor Yellow
-            } else {
-                Write-Host "[OK] DHCP desinstalado correctamente." -ForegroundColor Green
-            }
-            
+            Write-Host "[OK] DHCP desinstalado correctamente." -ForegroundColor Green
             Read-Host "`nPresiona Enter para volver al menú..."
         }
         
-        6 {
+        7 {
             Write-Host "Bye!"
             exit
         }
