@@ -11,16 +11,19 @@ validate_ip() {
 }
 
 configure_network() {
-    echo "Configurando IP $1 en $INTERFACE..."
-    nmcli con modify "$INTERFACE" ipv4.method manual ipv4.addresses "$1/24" 2>/dev/null
+    IP=$1
+    CIDR=$2
+    echo "Configurando IP $IP$CIDR en $INTERFACE..."
+    nmcli con modify "$INTERFACE" ipv4.method manual ipv4.addresses "$IP$CIDR" 2>/dev/null
     nmcli dev set "$INTERFACE" managed yes
-    nmcli con up "$INTERFACE" 2>/dev/null
+    nmcli con up "$INTERFACE" >/dev/null 2>&1
 }
 
 install_dhcp() {
-    echo "Instalando DHCP Server..."
-    sudo dnf install -y dhcp-server
-    sudo systemctl enable dhcpd
+    echo -n "Instalando DHCP Server (esto puede tardar un poco)... "
+    sudo dnf install -y dhcp-server >/dev/null 2>&1
+    sudo systemctl enable dhcpd >/dev/null 2>&1
+    echo "[OK]"
 }
 
 setup_dhcp_interface() {
@@ -33,24 +36,51 @@ setup_leases() {
     sudo mkdir -p /var/lib/dhcpd
     sudo touch /var/lib/dhcpd/dhcpd.leases
     sudo chown dhcpd:dhcpd /var/lib/dhcpd/dhcpd.leases
-    sudo restorecon -Rv /etc/dhcp /var/lib/dhcpd >/dev/null
+    sudo restorecon -Rv /etc/dhcp /var/lib/dhcpd >/dev/null 2>&1
 }
 
 uninstall_dhcp() {
-    echo "Desinstalando..."
+    echo -n "Desinstalando... "
     sudo systemctl stop dhcpd 2>/dev/null
-    sudo dnf remove -y dhcp-server
+    sudo dnf remove -y dhcp-server >/dev/null 2>&1
     sudo rm -f /etc/dhcp/dhcpd.conf
     sudo rm -f /etc/sysconfig/dhcpd
     sudo rm -rf /var/lib/dhcpd
+    echo "[OK]"
+}
+
+detect_class_info() {
+    IP=$1
+    OCTET1=$(echo $IP | cut -d'.' -f1)
+    OCTET2=$(echo $IP | cut -d'.' -f2)
+    OCTET3=$(echo $IP | cut -d'.' -f3)
+
+    if [ "$OCTET1" -ge 1 ] && [ "$OCTET1" -le 126 ]; then
+        echo "A"
+        echo "255.0.0.0"     
+        echo "/8"            
+        echo "$OCTET1.0.0.0" 
+    elif [ "$OCTET1" -ge 128 ] && [ "$OCTET1" -le 191 ]; then
+        echo "B"
+        echo "255.255.0.0"
+        echo "/16"
+        echo "$OCTET1.$OCTET2.0.0"
+    elif [ "$OCTET1" -ge 192 ] && [ "$OCTET1" -le 223 ]; then
+        echo "C"
+        echo "255.255.255.0"
+        echo "/24"
+        echo "$OCTET1.$OCTET2.$OCTET3.0"
+    else
+        echo "UNKNOWN"
+    fi
 }
 
 while true; do
     clear
     echo -e "\n    GESTION DHCP FEDORA (Interfaz: $INTERFACE) "
-    echo "1. Instalacion DHCP"
+    echo "1. Instalacion Silenciosa DHCP"
     echo "2. Verificacion de Estado"
-    echo "3. Configurar Ambito DHCP (Simple)"
+    echo "3. Configurar Ambito (Auto Clase A, B, C)"
     echo "4. Ver Leases (Clientes)"
     echo "5. ELIMINAR LEASES (Resetear Clientes)"
     echo "6. Desinstalar DHCP"
@@ -62,7 +92,7 @@ while true; do
             install_dhcp
             setup_dhcp_interface
             setup_leases
-            echo "[OK] DHCP instalado correctamente"
+            echo "[OK] DHCP listo"
             read -p "Enter para continuar..."
         ;;
 
@@ -72,7 +102,7 @@ while true; do
         ;;
 
         3)
-            echo -e "\n=== DHCP SIMPLE (Server fijo + Rango auto) ==="
+            echo -e "\n=== DHCP MULTI-CLASE AUTOMATICO ==="
             read -p "IP del SERVER (fija): " SERVER_IP
             read -p "IP FINAL del rango: " FINAL_IP
             
@@ -81,25 +111,28 @@ while true; do
                 read -p "Enter para continuar..."
                 continue
             fi
-            
-            SERVER_NUM=$(echo $SERVER_IP | awk -F. '{print $4}')
-            FINAL_NUM=$(echo $FINAL_IP | awk -F. '{print $4}')
-            
-            if [ $FINAL_NUM -le $SERVER_NUM ]; then
-                echo "[X] El IP final debe ser MAYOR que el del server"
-                echo "Server: $SERVER_IP ($SERVER_NUM)"
-                echo "Final: $FINAL_IP ($FINAL_NUM)"
-                read -p "Enter para continuar..."
+
+            read CLASE MASK CIDR SUBNET <<< $(detect_class_info "$SERVER_IP")
+
+            if [ "$CLASE" == "UNKNOWN" ]; then
+                echo "[X] IP no valida o es Clase D/E (Multicast/Reservada)"
+                read -p "Enter..."
                 continue
             fi
+
+            SERVER_LAST_OCTET=$(echo $SERVER_IP | awk -F. '{print $4}')
+            CLIENT_START_OCTET=$((SERVER_LAST_OCTET + 1))
             
-            NET_BASE=$(echo $SERVER_IP | cut -d'.' -f1-3)
-            CLIENT_START=$(echo $NET_BASE.$((SERVER_NUM + 1)))
-            
+            BASE_IP_PART=$(echo $SERVER_IP | rev | cut -d'.' -f2- | rev)
+            CLIENT_START="$BASE_IP_PART.$CLIENT_START_OCTET"
+
             echo ""
-            echo "CONFIGURACION:"
-            echo "Server: $SERVER_IP"
-            echo "Cliente: $CLIENT_START -> $FINAL_IP"
+            echo "CLASE DETECTADA: $CLASE"
+            echo "   Mascara: $MASK ($CIDR)"
+            echo "   Subred:  $SUBNET"
+            echo "--------------------------------"
+            echo "Server:  $SERVER_IP"
+            echo "Clientes: $CLIENT_START -> $FINAL_IP"
             echo ""
             
             read -p "Default lease (600 seg): " DEFAULT_LEASE
@@ -107,10 +140,10 @@ while true; do
             [ -z "$DEFAULT_LEASE" ] && DEFAULT_LEASE="600"
             [ -z "$MAX_LEASE" ] && MAX_LEASE="7200"
             
-            configure_network "$SERVER_IP"
+            configure_network "$SERVER_IP" "$CIDR"
             
             sudo bash -c "cat <<EOF > /etc/dhcp/dhcpd.conf
-subnet $NET_BASE.0 netmask 255.255.255.0 {
+subnet $SUBNET netmask $MASK {
     range $CLIENT_START $FINAL_IP;
     option routers $SERVER_IP;
     option domain-name-servers 8.8.8.8, 1.1.1.1;
@@ -124,15 +157,15 @@ EOF"
             setup_leases
             sudo systemctl daemon-reload
 
-            if sudo dhcpd -t -cf /etc/dhcp/dhcpd.conf; then
+            echo "Verificando configuracion..."
+            if sudo dhcpd -t -cf /etc/dhcp/dhcpd.conf >/dev/null 2>&1; then
                 sudo systemctl restart dhcpd
                 echo ""
-                echo "DHCP CONFIGURADO!"
-                echo "Server tiene: $SERVER_IP"
-                echo "Cliente agarrara: $CLIENT_START -> $FINAL_IP"
-                echo "Checa: sudo ss -tulpn | grep :67"
+                echo "DHCP CONFIGURADO CON EXITO ($CLASE)"
+                echo "Checa puerto: sudo ss -tulpn | grep :67"
             else
-                echo "Error config. Revisa: journalctl -u dhcpd"
+                echo "Error en la configuracion generada."
+                sudo dhcpd -t -cf /etc/dhcp/dhcpd.conf
             fi
             read -p "Enter para continuar..."
         ;;
@@ -150,19 +183,18 @@ EOF"
 
         5)
             echo "Eliminando leases..."
-            sudo systemctl stop dhcpd
+            sudo systemctl stop dhcpd >/dev/null 2>&1
             sudo rm -f /var/lib/dhcpd/dhcpd.leases
             sudo touch /var/lib/dhcpd/dhcpd.leases
             sudo chown dhcpd:dhcpd /var/lib/dhcpd/dhcpd.leases
-            sudo restorecon -Rv /var/lib/dhcpd >/dev/null
+            sudo restorecon -Rv /var/lib/dhcpd >/dev/null 2>&1
             sudo systemctl start dhcpd
-            echo "[OK] Leases eliminados. Clientes deben renovar."
+            echo "[OK] Clientes reseteados."
             read -p "Enter para continuar..."
         ;;
 
         6)
             uninstall_dhcp
-            echo "[OK] DHCP desinstalado"
             read -p "Enter para continuar..."
         ;;
 
