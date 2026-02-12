@@ -1,10 +1,10 @@
-$adapter = Get-NetAdapter | Where-Object { $_.Status -eq "Up" -and $_.Name -notlike "*Loopback*" } | Select-Object -First 1
+$adapter = Get-NetAdapter | Where-Object { $_.Name -match "2" -or $_.Name -match "Internal" } | Select-Object -First 1
 
 if (-not $adapter) {
-    Write-Host "[ERROR FATAL] No encuentro ninguna tarjeta de red conectada." -ForegroundColor Red
-    Write-Host "Asegúrate de que la VM tenga el cable conectado."
-    Pause
-    Exit
+    Write-Host "No encontré 'Ethernet 2' automáticamente." -ForegroundColor Yellow
+    Get-NetAdapter | Select-Object Name, InterfaceDescription, Status
+    $nombreManual = Read-Host "Escribe el nombre EXACTO de la interfaz para DHCP (ej: Ethernet 2)"
+    $adapter = Get-NetAdapter -Name $nombreManual
 }
 
 $INTERFACE = $adapter.Name
