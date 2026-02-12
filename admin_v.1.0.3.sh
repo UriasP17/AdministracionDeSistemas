@@ -2,7 +2,11 @@
 
 INTERFACE=$(nmcli -t -f NAME,TYPE connection show | grep ethernet | sed -n '2p' | cut -d: -f1)
 
-
+if [ -z "$INTERFACE" ]; then
+    echo "[ERROR] No se pudo detectar la segunda interfaz ethernet"
+    nmcli device status
+    exit 1
+fi
 validate_ip() {
     [[ $1 =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]
 }
