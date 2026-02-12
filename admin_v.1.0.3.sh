@@ -1,7 +1,21 @@
 #!/bin/bash
 
-SERVER_IP=$(ip -4 addr show "$INTERFACE" | awk '/inet /{print $2}' | cut -d/ -f1)
-NET_BASE=$(echo $SERVER_IP | cut -d'.' -f1-3)
+# ================================
+# AUTO DHCP MANAGER - FEDORA
+# ================================
+
+# Auto-detect second ethernet
+INTERFACE=$(nmcli -t -f NAME,TYPE connection show | awk -F: '$2=="ethernet"{print $1}' | sed -n '2p')
+
+if [ -z "$INTERFACE" ]; then
+    INTERFACE=$(nmcli -t -f NAME,TYPE connection show | awk -F: '$2=="ethernet"{print $1}' | head -n1)
+fi
+
+if [ -z "$INTERFACE" ]; then
+    echo "[FATAL] No se detectaron interfaces ethernet"
+    nmcli device status
+    exit 1
+fi
 
 validate_ip() {
     [[ $1 =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]
@@ -65,36 +79,54 @@ while true; do
         ;;
 
         3)
-            read -p "IP del servidor DHCP (ej: 192.168.10.1): " SERVER_IP
-            read -p "Inicio rango clientes (ej: 192.168.10.50): " RANGE_START
-            read -p "Fin rango clientes (ej: 192.168.10.100): " RANGE_END
-            read -p "Gateway real de la red (ej: 192.168.10.1): " GATEWAY
+            echo "\nCONFIGURACIÓN SIMPLE DHCP"
+            read -p "IP inicial (SERVER) ej: 192.168.10.10: " START_IP
+            read -p "IP final (CLIENTE) ej: 192.168.10.50: " END_IP
 
-            if validate_ip "$SERVER_IP" && validate_ip "$RANGE_START" && validate_ip "$RANGE_END" && validate_ip "$GATEWAY"; then
+            read -p "Gateway (opcional, Enter para omitir): " GATEWAY
+            read -p "DNS (opcional, ej: 8.8.8.8,1.1.1.1 | Enter para default): " DNS
 
-                NET_BASE=$(echo $SERVER_IP | cut -d'.' -f1-3)
+            if ! validate_ip "$START_IP" || ! validate_ip "$END_IP"; then
+                echo "[X] IPs inválidas"
+                read -p "Enter para continuar..."
+                continue
+            fi
 
-                configure_network "$SERVER_IP"
+            SERVER_IP="$START_IP"
+            NET_BASE=$(echo $SERVER_IP | cut -d'.' -f1-3)
+            CLIENT_START=$(echo $SERVER_IP | awk -F. '{print $1"."$2"."$3"."($4+1)}')
 
-                sudo bash -c "cat <<EOF > /etc/dhcp/dhcpd.conf
+            configure_network "$SERVER_IP"
+
+            # Valores opcionales
+            [ -z "$GATEWAY" ] && GATEWAY="$SERVER_IP"
+            [ -z "$DNS" ] && DNS="8.8.8.8, 1.1.1.1"
+
+            sudo bash -c "cat <<EOF > /etc/dhcp/dhcpd.conf
 subnet ${NET_BASE}.0 netmask 255.255.255.0 {
-    range $RANGE_START $RANGE_END;
+    range $CLIENT_START $END_IP;
     option routers $GATEWAY;
-    option domain-name-servers 8.8.8.8, 1.1.1.1;
+    option domain-name-servers $DNS;
     default-lease-time 600;
     max-lease-time 7200;
 }
 EOF"
 
-                setup_dhcp_interface
-                setup_leases
+            setup_dhcp_interface
+            setup_leases
 
-                sudo systemctl daemon-reload
+            sudo systemctl daemon-reload
+
+            # Validación antes de arrancar
+            if sudo dhcpd -t -cf /etc/dhcp/dhcpd.conf; then
                 sudo systemctl restart dhcpd
-
-                echo "[OK] DHCP configurado y activo en $INTERFACE"
+                echo "[OK] DHCP activo"
+                echo "SERVER IP : $SERVER_IP"
+                echo "CLIENTES  : $CLIENT_START -> $END_IP"
+                echo "GATEWAY   : $GATEWAY"
+                echo "DNS       : $DNS"
             else
-                echo "[X] IPs inválidas."
+                echo "[ERROR] Configuración DHCP inválida"
             fi
 
             read -p "Enter para continuar..."
