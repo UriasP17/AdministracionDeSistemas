@@ -1,3 +1,4 @@
+# --- BÚSQUEDA AUTOMÁTICA DE INTERFAZ ---
 $adapter = Get-NetAdapter | Where-Object { $_.Status -eq "Up" } | Select-Object -First 1
 
 if (-not $adapter) {
@@ -19,9 +20,12 @@ function Validate-IP {
 function Get-IPClassInfo {
     param([string]$IP)
     
-    $Octet1 = [int]($IP -split '\.')[0]
-    $Octet2 = ($IP -split '\.')[1]
-    $Octet3 = ($IP -split '\.')[2]
+    $parts = $IP -split '\.'
+    if ($parts.Count -lt 4) { return $null }
+    
+    $Octet1 = [int]$parts[0]
+    $Octet2 = $parts[1]
+    $Octet3 = $parts[2]
 
     if ($Octet1 -ge 1 -and $Octet1 -le 126) {
         return @{ Class="A"; Mask="255.0.0.0"; Prefix=8; Subnet="$Octet1.0.0.0" }
@@ -69,7 +73,7 @@ function Setup-DHCPScope {
     
     $ScopeName = "Red_Auto_$SubnetID"
     
-    Write-Host "Creando ámbito $ScopeName (Mascara: $SubnetMask)..." -ForegroundColor Cyan
+    Write-Host "Creando ambito $ScopeName (Mascara: $SubnetMask)..." -ForegroundColor Cyan
 
     Get-DhcpServerv4Scope | Remove-DhcpServerv4Scope -Force -ErrorAction SilentlyContinue
     
@@ -106,22 +110,22 @@ function Clear-AllLeases {
             Restart-Service dhcpserver
             Write-Host "Clientes reseteados." -ForegroundColor Green
         } else {
-            Write-Host "[!] No hay ámbitos activos." -ForegroundColor Yellow
+            Write-Host "[!] No hay ambitos activos." -ForegroundColor Yellow
         }
     }
     catch {
-        Write-Host "Error: $_" -ForegroundColor Red
+        Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
     }
 }
 
 function Show-Menu {
     Clear-Host
     Write-Host "==========================================" -ForegroundColor Cyan
-    Write-Host "    GESTIÓN DHCP WINDOWS SERVER ($INTERFACE)" -ForegroundColor Cyan
+    Write-Host "    GESTION DHCP WINDOWS SERVER ($INTERFACE)" -ForegroundColor Cyan
     Write-Host "==========================================" -ForegroundColor Cyan
-    Write-Host "1. Instalación DHCP"
-    Write-Host "2. Verificación de Estado"
-    Write-Host "3. Configurar Ámbito (Auto A, B, C)"
+    Write-Host "1. Instalacion DHCP"
+    Write-Host "2. Verificacion de Estado"
+    Write-Host "3. Configurar Ambito (Auto A, B, C)"
     Write-Host "4. Ver Leases (Clientes)"
     Write-Host "5. ELIMINAR LEASES (Resetear Clientes)" 
     Write-Host "6. Desinstalar DHCP"
@@ -132,7 +136,7 @@ function Show-Menu {
 
 while ($true) {
     Show-Menu
-    $opt = Read-Host "Elige una opción"
+    $opt = Read-Host "Elige una opcion"
     
     switch ($opt) {
         1 {
@@ -153,18 +157,18 @@ while ($true) {
         }
         
         3 {
-            Write-Host "`n--- DHCP MULTI-CLASE AUTOMÁTICO ---" -ForegroundColor Yellow
+            Write-Host "`n--- DHCP MULTI-CLASE AUTOMATICO ---" -ForegroundColor Yellow
             $ServerIP = Read-Host "IP inicial (SERVER) ej: 10.0.0.1"
             $EndIP = Read-Host "IP final (CLIENTE) ej: 10.0.0.50"
             
             if (-not (Validate-IP $ServerIP) -or -not (Validate-IP $EndIP)) {
-                Write-Host "[X] IPs inválidas" -ForegroundColor Red; Read-Host "Enter..."; continue
+                Write-Host "[X] IPs invalidas" -ForegroundColor Red; Read-Host "Enter..."; continue
             }
 
             $ClassInfo = Get-IPClassInfo -IP $ServerIP
             
             if (-not $ClassInfo) {
-                Write-Host "[X] IP no válida o reservada (Clase D/E)." -ForegroundColor Red; Read-Host "Enter..."; continue
+                Write-Host "[X] IP no valida o reservada (Clase D/E)." -ForegroundColor Red; Read-Host "Enter..."; continue
             }
 
             $BaseIP = ($ServerIP -split '\.')[0..2] -join '.'
@@ -191,7 +195,7 @@ while ($true) {
                 Write-Host "`n[OK] DHCP Configurado Exitosamente ($($ClassInfo.Class))" -ForegroundColor Green
             }
             catch {
-                Write-Host "[ERROR] $_" -ForegroundColor Red
+                Write-Host "[ERROR] $($_.Exception.Message)" -ForegroundColor Red
             }
             Read-Host "`nPresiona Enter..."
         }
@@ -200,7 +204,7 @@ while ($true) {
             Write-Host "`n------ CLIENTES CONECTADOS ------" -ForegroundColor Cyan
             try {
                 Get-DhcpServerv4Scope | Get-DhcpServerv4Lease | Format-Table IPAddress, HostName, ClientId -AutoSize
-            } catch { Write-Host "Sin clientes o sin ámbitos." -ForegroundColor Gray }
+            } catch { Write-Host "Sin clientes o sin ambitos." -ForegroundColor Gray }
             Read-Host "`nPresiona Enter..."
         }
 
