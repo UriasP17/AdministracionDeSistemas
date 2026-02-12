@@ -68,59 +68,71 @@ while true; do
             read -p "Enter para continuar..."
         ;;
 
-        3)
-            echo "\nCONFIGURACIÓN SIMPLE DHCP"
-            read -p "IP inicial (SERVER) ej: 192.168.10.10: " START_IP
-            read -p "IP final (CLIENTE) ej: 192.168.10.50: " END_IP
-
-            read -p "Gateway (opcional, Enter para omitir): " GATEWAY
-            read -p "DNS (opcional, ej: 8.8.8.8,1.1.1.1 | Enter para default): " DNS
-
-            if ! validate_ip "$START_IP" || ! validate_ip "$END_IP"; then
-                echo "[X] IPs inválidas"
-                read -p "Enter para continuar..."
-                continue
-            fi
-
-            SERVER_IP="$START_IP"
-            NET_BASE=$(echo $SERVER_IP | cut -d'.' -f1-3)
-            CLIENT_START=$(echo $SERVER_IP | awk -F. '{print $1"."$2"."$3"."($4+1)}')
-
-            configure_network "$SERVER_IP"
-
-            # Valores opcionales
-            [ -z "$GATEWAY" ] && GATEWAY="$SERVER_IP"
-            [ -z "$DNS" ] && DNS="8.8.8.8, 1.1.1.1"
-
-            sudo bash -c "cat <<EOF > /etc/dhcp/dhcpd.conf
-subnet ${NET_BASE}.0 netmask 255.255.255.0 {
-    range $CLIENT_START $END_IP;
-    option routers $GATEWAY;
-    option domain-name-servers $DNS;
-    default-lease-time 600;
-    max-lease-time 7200;
+       3)
+    echo "
+=== DHCP SIMPLE (Server fijo + Rango auto) ==="
+    read -p "IP del SERVER (fija): " SERVER_IP
+    read -p "IP FINAL del rango: " FINAL_IP
+    
+    if ! validate_ip "$SERVER_IP" || ! validate_ip "$FINAL_IP"; then
+        echo "[X] IP(s) invalida(s)"
+        read -p "Enter para continuar..."
+        continue
+    fi
+    
+    SERVER_NUM=$(echo $SERVER_IP | awk -F. '{print $4}')
+    FINAL_NUM=$(echo $FINAL_IP | awk -F. '{print $4}')
+    if [ $FINAL_NUM -le $SERVER_NUM ]; then
+        echo "[X] El IP final debe ser MAYOR que el del server"
+        echo "Server: $SERVER_IP ($SERVER_NUM)"
+        echo "Final: $FINAL_IP ($FINAL_NUM)"
+        read -p "Enter para continuar..."
+        continue
+    fi
+    
+    NET_BASE=$(echo $SERVER_IP | cut -d'.' -f1-3)
+    CLIENT_START=$(echo $NET_BASE.$((SERVER_NUM + 1)))
+    
+    echo ""
+    echo "CONFIGURACION:"
+    echo "Server: $SERVER_IP"
+    echo "Cliente: $CLIENT_START -> $FINAL_IP"
+    echo ""
+    
+    read -p "Default lease (600 seg): " DEFAULT_LEASE
+    read -p "Max lease (7200 seg): " MAX_LEASE
+    [ -z "$DEFAULT_LEASE" ] && DEFAULT_LEASE="600"
+    [ -z "$MAX_LEASE" ] && MAX_LEASE="7200"
+    
+    configure_network "$SERVER_IP/24"
+    
+    sudo bash -c "cat <<EOF > /etc/dhcp/dhcpd.conf
+subnet $NET_BASE.0 netmask 255.255.255.0 {
+    range $CLIENT_START $FINAL_IP;
+    option routers $SERVER_IP;
+    option domain-name-servers 8.8.8.8, 1.1.1.1;
+    option domain-name "local";
+    default-lease-time $DEFAULT_LEASE;
+    max-lease-time $MAX_LEASE;
 }
 EOF"
 
-            setup_dhcp_interface
-            setup_leases
+    setup_dhcp_interface
+    setup_leases
+    sudo systemctl daemon-reload
 
-            sudo systemctl daemon-reload
-
-            # Validación antes de arrancar
-            if sudo dhcpd -t -cf /etc/dhcp/dhcpd.conf; then
-                sudo systemctl restart dhcpd
-                echo "[OK] DHCP activo"
-                echo "SERVER IP : $SERVER_IP"
-                echo "CLIENTES  : $CLIENT_START -> $END_IP"
-                echo "GATEWAY   : $GATEWAY"
-                echo "DNS       : $DNS"
-            else
-                echo "[ERROR] Configuración DHCP inválida"
-            fi
-
-            read -p "Enter para continuar..."
-        ;;
+    if sudo dhcpd -t -cf /etc/dhcp/dhcpd.conf; then
+        sudo systemctl restart dhcpd
+        echo ""
+        echo "DHCP CONFIGURADO!"
+        echo "Server tiene: $SERVER_IP"
+        echo "Cliente agarrara: $CLIENT_START -> $FINAL_IP"
+        echo "Checa: sudo ss -tulpn | grep :67"
+    else
+        echo "Error config. Revisa: journalctl -u dhcpd"
+    fi
+    read -p "Enter para continuar..."
+;;
 
         4)
             echo "------ LEASES DHCP ------"
