@@ -51,20 +51,21 @@ uninstall_dhcp() {
 
 detect_class_info() {
     IP=$1
-    OCTET1=$(echo $IP | cut -d'.' -f1)
-    OCTET2=$(echo $IP | cut -d'.' -f2)
-    OCTET3=$(echo $IP | cut -d'.' -f3)
+    O1=$(cut -d. -f1 <<< "$IP")
+    O2=$(cut -d. -f2 <<< "$IP")
+    O3=$(cut -d. -f3 <<< "$IP")
 
-    if [ "$OCTET1" -ge 1 ] && [ "$OCTET1" -le 126 ]; then
-        echo "A 255.0.0.0 /8 $OCTET1.0.0.0" 
-    elif [ "$OCTET1" -ge 128 ] && [ "$OCTET1" -le 191 ]; then
-        echo "B 255.255.0.0 /16 $OCTET1.$OCTET2.0.0"
-    elif [ "$OCTET1" -ge 192 ] && [ "$OCTET1" -le 223 ]; then
-        echo "C 255.255.255.0 /24 $OCTET1.$OCTET2.$OCTET3.0"
+    if [ "$O1" -ge 1 ] && [ "$O1" -le 126 ]; then
+        echo "A 255.0.0.0 8 $O1.0.0.0"
+    elif [ "$O1" -ge 128 ] && [ "$O1" -le 191 ]; then
+        echo "B 255.255.0.0 16 $O1.$O2.0.0"
+    elif [ "$O1" -ge 192 ] && [ "$O1" -le 223 ]; then
+        echo "C 255.255.255.0 24 $O1.$O2.$O3.0"
     else
         echo "UNKNOWN 0 0 0"
     fi
 }
+
 
 while true; do
     clear
