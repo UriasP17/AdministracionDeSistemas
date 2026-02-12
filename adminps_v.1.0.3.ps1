@@ -1,9 +1,9 @@
-$adapter = Get-NetAdapter | Where-Object { $_.Name -match "2" -or $_.Name -match "Internal" } | Select-Object -First 1
+$adapter = Get-NetAdapter | Where-Object { $_.Status -eq "Up" } | Select-Object -First 1
 
 if (-not $adapter) {
-    Write-Host "No encontré 'Ethernet 2' automáticamente." -ForegroundColor Yellow
+    Write-Host "No encontré adaptadores activos." -ForegroundColor Yellow
     Get-NetAdapter | Select-Object Name, InterfaceDescription, Status
-    $nombreManual = Read-Host "Escribe el nombre EXACTO de la interfaz para DHCP (ej: Ethernet 2)"
+    $nombreManual = Read-Host "Escribe el nombre EXACTO de la interfaz (ej: Ethernet)"
     $adapter = Get-NetAdapter -Name $nombreManual
 }
 
@@ -16,25 +16,46 @@ function Validate-IP {
     return $IP -match '^([0-9]{1,3}\.){3}[0-9]{1,3}$'
 }
 
-function Configure-Network {
-    param([string]$IPAddress)
+function Get-IPClassInfo {
+    param([string]$IP)
     
-    Write-Host "Configurando IP estática $IPAddress en interfaz '$INTERFACE'..." -ForegroundColor Yellow
+    $Octet1 = [int]($IP -split '\.')[0]
+    $Octet2 = ($IP -split '\.')[1]
+    $Octet3 = ($IP -split '\.')[2]
+
+    if ($Octet1 -ge 1 -and $Octet1 -le 126) {
+        return @{ Class="A"; Mask="255.0.0.0"; Prefix=8; Subnet="$Octet1.0.0.0" }
+    }
+    elseif ($Octet1 -ge 128 -and $Octet1 -le 191) {
+        return @{ Class="B"; Mask="255.255.0.0"; Prefix=16; Subnet="$Octet1.$Octet2.0.0" }
+    }
+    elseif ($Octet1 -ge 192 -and $Octet1 -le 223) {
+        return @{ Class="C"; Mask="255.255.255.0"; Prefix=24; Subnet="$Octet1.$Octet2.$Octet3.0" }
+    }
+    else {
+        return $null 
+    }
+}
+
+function Configure-Network {
+    param([string]$IPAddress, [int]$Prefix)
+    
+    Write-Host "Configurando IP $IPAddress/$Prefix en '$INTERFACE'..." -ForegroundColor Yellow
     
     Remove-NetIPAddress -InterfaceAlias $INTERFACE -Confirm:$false -ErrorAction SilentlyContinue
     Remove-NetRoute -InterfaceAlias $INTERFACE -Confirm:$false -ErrorAction SilentlyContinue
     
-    New-NetIPAddress -InterfaceAlias $INTERFACE -IPAddress $IPAddress -PrefixLength 24 -ErrorAction Stop
+    New-NetIPAddress -InterfaceAlias $INTERFACE -IPAddress $IPAddress -PrefixLength $Prefix -ErrorAction Stop
 }
 
 function Install-DHCP {
-    Write-Host "Instalando rol DHCP..." -ForegroundColor Yellow
-    Install-WindowsFeature -Name DHCP -IncludeManagementTools
+    Write-Host -NoNewline "Instalando rol DHCP... " -ForegroundColor Yellow
+    Install-WindowsFeature -Name DHCP -IncludeManagementTools -WarningAction SilentlyContinue | Out-Null
     
-    Write-Host "Autorizando servidor en Active Directory (Local)..."
+    Write-Host "[OK]" -ForegroundColor Green
+    Write-Host "Autorizando..."
     Add-DhcpServerSecurityGroup -ErrorAction SilentlyContinue
     Restart-Service dhcpserver
-    Write-Host "[OK] DHCP instalado correctamente" -ForegroundColor Green
 }
 
 function Setup-DHCPScope {
@@ -42,17 +63,15 @@ function Setup-DHCPScope {
         [string]$ServerIP,
         [string]$StartRange,
         [string]$EndRange,
-        [string]$Gateway,
-        [string]$DNS
+        [string]$SubnetMask,   
+        [string]$SubnetID      
     )
     
-    $NetBase = ($ServerIP -split '\.')[0..2] -join '.'
-    $ScopeName = "Red_$NetBase"
-    $SubnetMask = "255.255.255.0"
+    $ScopeName = "Red_Auto_$SubnetID"
     
-    Write-Host "Creando ámbito DHCP: $ScopeName..."
+    Write-Host "Creando ámbito $ScopeName (Mascara: $SubnetMask)..." -ForegroundColor Cyan
 
-    Get-DhcpServerv4Scope | Where-Object {$_.Name -eq $ScopeName} | Remove-DhcpServerv4Scope -Force -ErrorAction SilentlyContinue
+    Get-DhcpServerv4Scope | Remove-DhcpServerv4Scope -Force -ErrorAction SilentlyContinue
     
     Add-DhcpServerv4Scope -Name $ScopeName `
         -StartRange $StartRange `
@@ -60,20 +79,17 @@ function Setup-DHCPScope {
         -SubnetMask $SubnetMask `
         -State Active
     
-    if ($Gateway) {
-        Set-DhcpServerv4OptionValue -ScopeId "$NetBase.0" -Router $Gateway
-    }
+    Set-DhcpServerv4OptionValue -ScopeId $SubnetID -Router $ServerIP
     
-    if ($DNS) {
-        $DNSServers = $DNS -split ','
-        Set-DhcpServerv4OptionValue -ScopeId "$NetBase.0" -DnsServer $DNSServers
-    }
+    Set-DhcpServerv4OptionValue -ScopeId $SubnetID -DnsServer "8.8.8.8", "1.1.1.1"
   
     Add-DhcpServerInDC -DnsName $env:COMPUTERNAME -IPAddress $ServerIP -ErrorAction SilentlyContinue
+    
+    Add-DhcpServerv4Binding -BindingState $true -IPAddress $ServerIP -ErrorAction SilentlyContinue
 }
 
 function Clear-AllLeases {
-    Write-Host "`n--- ELIMINANDO TODOS LOS LEASES (IPs ENTREGADAS) ---" -ForegroundColor Yellow
+    Write-Host "`n--- ELIMINANDO LEASES Y RESETEANDO ---" -ForegroundColor Yellow
     try {
         $scopes = Get-DhcpServerv4Scope -ErrorAction SilentlyContinue
         if ($scopes) {
@@ -82,19 +98,19 @@ function Clear-AllLeases {
                 if ($leases) {
                     foreach ($lease in $leases) {
                         Remove-DhcpServerv4Lease -IPAddress $lease.IPAddress -Force
-                        Write-Host "Eliminado lease: $($lease.IPAddress) - $($lease.HostName)" -ForegroundColor Red
+                        Write-Host "Eliminado: $($lease.IPAddress)" -ForegroundColor Red
                     }
-                } else {
-                    Write-Host "El ámbito $($scope.ScopeId) ya estaba limpio." -ForegroundColor Gray
                 }
             }
-            Write-Host "✅ ¡Limpieza completada! Los clientes pedirán IP nueva." -ForegroundColor Green
+            Write-Host "Reiniciando servicio para aplicar cambios..." -ForegroundColor Gray
+            Restart-Service dhcpserver
+            Write-Host "Clientes reseteados." -ForegroundColor Green
         } else {
-            Write-Host "[!] No hay ámbitos configurados para limpiar." -ForegroundColor Yellow
+            Write-Host "[!] No hay ámbitos activos." -ForegroundColor Yellow
         }
     }
     catch {
-        Write-Host "Error al limpiar leases: $_" -ForegroundColor Red
+        Write-Host "Error: $_" -ForegroundColor Red
     }
 }
 
@@ -104,11 +120,11 @@ function Show-Menu {
     Write-Host "    GESTIÓN DHCP WINDOWS SERVER ($INTERFACE)" -ForegroundColor Cyan
     Write-Host "==========================================" -ForegroundColor Cyan
     Write-Host "1. Instalación DHCP"
-    Write-Host "2. Verificación de Estado (Real)"
-    Write-Host "3. Configurar Ámbito DHCP + IP Estática"
-    Write-Host "4. Ver Leases (Clientes Conectados)"
+    Write-Host "2. Verificación de Estado"
+    Write-Host "3. Configurar Ámbito (Auto A, B, C)"
+    Write-Host "4. Ver Leases (Clientes)"
     Write-Host "5. ELIMINAR LEASES (Resetear Clientes)" 
-    Write-Host "6. Desinstalar DHCP (Limpieza Total)"
+    Write-Host "6. Desinstalar DHCP"
     Write-Host "7. Salir"
     Write-Host "==========================================" -ForegroundColor Cyan
     Write-Host ""
@@ -121,99 +137,86 @@ while ($true) {
     switch ($opt) {
         1 {
             Install-DHCP
-            Read-Host "`nPresiona Enter para volver al menú..."
+            Read-Host "`nPresiona Enter..."
         }
         
         2 {
-            Write-Host "`nConsultando estado del servicio..." -ForegroundColor Yellow
+            Write-Host "`nEstado del servicio..." -ForegroundColor Yellow
             try {
-                $service = Get-Service dhcpserver -ErrorAction Stop
-                
-                if ($service.Status -eq "Running") {
-                    Write-Host "ESTADO: ACTIVO (Running)" -ForegroundColor Green
-                    Write-Host "`n--- Ámbitos Configurados ---"
-                    Get-DhcpServerv4Scope | Format-Table ScopeId, Name, State, StartRange, EndRange -AutoSize
-                } else {
-                    Write-Host "ESTADO: DETENIDO ($($service.Status))" -ForegroundColor Red
-                }
-            }
-            catch {
-                Write-Host "ESTADO: NO INSTALADO (El servicio DHCP no existe)" -ForegroundColor DarkGray
-            }
-            Read-Host "`nPresiona Enter para volver al menú..."
+                $s = Get-Service dhcpserver -ErrorAction Stop
+                if ($s.Status -eq "Running") {
+                    Write-Host "ACTIVO (Running)" -ForegroundColor Green
+                    Get-DhcpServerv4Scope | Format-Table ScopeId, SubnetMask, StartRange, EndRange -AutoSize
+                } else { Write-Host "DETENIDO" -ForegroundColor Red }
+            } catch { Write-Host "NO INSTALADO" -ForegroundColor DarkGray }
+            Read-Host "`nPresiona Enter..."
         }
         
         3 {
-            Write-Host "`nCONFIGURACIÓN SIMPLE DHCP" -ForegroundColor Yellow
-            $ServerIP = Read-Host "IP inicial (SERVER) ej: 192.168.10.10"
-            $EndIP = Read-Host "IP final (CLIENTE) ej: 192.168.10.50"
-            $Gateway = Read-Host "Gateway (opcional, Enter para usar IP del server)"
-            $DNS = Read-Host "DNS (opcional, ej: 8.8.8.8,1.1.1.1)"
+            Write-Host "`n--- DHCP MULTI-CLASE AUTOMÁTICO ---" -ForegroundColor Yellow
+            $ServerIP = Read-Host "IP inicial (SERVER) ej: 10.0.0.1"
+            $EndIP = Read-Host "IP final (CLIENTE) ej: 10.0.0.50"
             
             if (-not (Validate-IP $ServerIP) -or -not (Validate-IP $EndIP)) {
-                Write-Host "[X] IPs inválidas" -ForegroundColor Red
-                Read-Host "`nPresiona Enter para continuar..."
-                continue
+                Write-Host "[X] IPs inválidas" -ForegroundColor Red; Read-Host "Enter..."; continue
             }
+
+            $ClassInfo = Get-IPClassInfo -IP $ServerIP
             
-            $NetBase = ($ServerIP -split '\.')[0..2] -join '.'
+            if (-not $ClassInfo) {
+                Write-Host "[X] IP no válida o reservada (Clase D/E)." -ForegroundColor Red; Read-Host "Enter..."; continue
+            }
+
+            $BaseIP = ($ServerIP -split '\.')[0..2] -join '.'
             $LastOctet = [int]($ServerIP -split '\.')[-1]
-            $StartRange = "$NetBase.$($LastOctet + 1)"
-            
-            if (-not $Gateway) { $Gateway = $ServerIP }
-            if (-not $DNS) { $DNS = "8.8.8.8,1.1.1.1" }
-            
+            $StartRange = "$BaseIP.$($LastOctet + 1)"
+
+            Write-Host "`nCLASE DETECTADA: $($ClassInfo.Class)" -ForegroundColor Green
+            Write-Host "   Mascara: $($ClassInfo.Mask) (/$($ClassInfo.Prefix))"
+            Write-Host "   Subred:  $($ClassInfo.Subnet)"
+            Write-Host "--------------------------------"
+            Write-Host "Server:  $ServerIP"
+            Write-Host "Clientes: $StartRange -> $EndIP"
+            Write-Host ""
+
             try {
-                Configure-Network $ServerIP
-                Setup-DHCPScope -ServerIP $ServerIP -StartRange $StartRange -EndRange $EndIP -Gateway $Gateway -DNS $DNS
+                Configure-Network -IPAddress $ServerIP -Prefix $ClassInfo.Prefix
                 
-                Write-Host "[OK] DHCP activo y configurado en $INTERFACE" -ForegroundColor Green
-                Write-Host "SERVER IP : $ServerIP"
-                Write-Host "CLIENTES  : $StartRange -> $EndIP"
+                Setup-DHCPScope -ServerIP $ServerIP `
+                                -StartRange $StartRange `
+                                -EndRange $EndIP `
+                                -SubnetMask $ClassInfo.Mask `
+                                -SubnetID $ClassInfo.Subnet
+                
+                Write-Host "`n[OK] DHCP Configurado Exitosamente ($($ClassInfo.Class))" -ForegroundColor Green
             }
             catch {
-                Write-Host "[ERROR] Algo falló al configurar: $_" -ForegroundColor Red
+                Write-Host "[ERROR] $_" -ForegroundColor Red
             }
-            Read-Host "`nPresiona Enter para volver al menú..."
+            Read-Host "`nPresiona Enter..."
         }
         
         4 {
-            Write-Host "`n------ LEASES DHCP (CLIENTES) ------" -ForegroundColor Cyan
+            Write-Host "`n------ CLIENTES CONECTADOS ------" -ForegroundColor Cyan
             try {
-                $scopes = Get-DhcpServerv4Scope -ErrorAction SilentlyContinue
-                if ($scopes) {
-                    $leases = $scopes | Get-DhcpServerv4Lease -ErrorAction SilentlyContinue
-                    if ($leases) {
-                        $leases | Format-Table IPAddress, HostName, ClientId, LeaseExpiryTime -AutoSize
-                    } else {
-                        Write-Host "Hay ámbitos creados, pero NINGÚN cliente se ha conectado aún." -ForegroundColor Yellow
-                        Write-Host "Ve a tu Ubuntu y ejecuta: sudo dhclient -v" -ForegroundColor Gray
-                    }
-                } else {
-                    Write-Host "[!] No has creado ningún Ámbito DHCP (Opción 3)." -ForegroundColor Red
-                }
-            }
-            catch { Write-Host "Error al consultar DHCP: $_" -ForegroundColor Red }
-            Write-Host "------------------------------------"
-            Read-Host "`nPresiona Enter para volver al menú..."
+                Get-DhcpServerv4Scope | Get-DhcpServerv4Lease | Format-Table IPAddress, HostName, ClientId -AutoSize
+            } catch { Write-Host "Sin clientes o sin ámbitos." -ForegroundColor Gray }
+            Read-Host "`nPresiona Enter..."
         }
 
         5 {
             Clear-AllLeases
-            Read-Host "`nPresiona Enter para volver al menú..."
+            Read-Host "`nPresiona Enter..."
         }
 
         6 {
-            Write-Host "Desinstalando DHCP..." -ForegroundColor Yellow
-            try { Get-DhcpServerv4Scope -ErrorAction SilentlyContinue | Remove-DhcpServerv4Scope -Force -ErrorAction SilentlyContinue } catch {}
-            Uninstall-WindowsFeature -Name DHCP -IncludeManagementTools -Restart:$false
-            Write-Host "[OK] DHCP desinstalado correctamente." -ForegroundColor Green
-            Read-Host "`nPresiona Enter para volver al menú..."
+            Write-Host "Desinstalando..." -ForegroundColor Yellow
+            try { Get-DhcpServerv4Scope | Remove-DhcpServerv4Scope -Force -ErrorAction SilentlyContinue } catch {}
+            Uninstall-WindowsFeature -Name DHCP -IncludeManagementTools -Restart:$false | Out-Null
+            Write-Host "[OK] Desinstalado." -ForegroundColor Green
+            Read-Host "`nPresiona Enter..."
         }
         
-        7 {
-            Write-Host "Bye!"
-            exit
-        }
+        7 { exit }
     }
 }
