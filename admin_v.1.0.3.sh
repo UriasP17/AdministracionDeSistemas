@@ -20,7 +20,7 @@ configure_network() {
 }
 
 install_dhcp() {
-    echo -n "Instalando DHCP Server (esto puede tardar un poco)... "
+    echo -n "Instalando DHCP Server... "
     sudo dnf install -y dhcp-server >/dev/null 2>&1
     sudo systemctl enable dhcpd >/dev/null 2>&1
     echo "[OK]"
@@ -56,22 +56,13 @@ detect_class_info() {
     OCTET3=$(echo $IP | cut -d'.' -f3)
 
     if [ "$OCTET1" -ge 1 ] && [ "$OCTET1" -le 126 ]; then
-        echo "A"
-        echo "255.0.0.0"     
-        echo "/8"            
-        echo "$OCTET1.0.0.0" 
+        echo "A 255.0.0.0 /8 $OCTET1.0.0.0" 
     elif [ "$OCTET1" -ge 128 ] && [ "$OCTET1" -le 191 ]; then
-        echo "B"
-        echo "255.255.0.0"
-        echo "/16"
-        echo "$OCTET1.$OCTET2.0.0"
+        echo "B 255.255.0.0 /16 $OCTET1.$OCTET2.0.0"
     elif [ "$OCTET1" -ge 192 ] && [ "$OCTET1" -le 223 ]; then
-        echo "C"
-        echo "255.255.255.0"
-        echo "/24"
-        echo "$OCTET1.$OCTET2.$OCTET3.0"
+        echo "C 255.255.255.0 /24 $OCTET1.$OCTET2.$OCTET3.0"
     else
-        echo "UNKNOWN"
+        echo "UNKNOWN 0 0 0"
     fi
 }
 
