@@ -1,21 +1,11 @@
 #!/bin/bash
+INTERFACE="enp0s8"
 
-# ================================
-# AUTO DHCP MANAGER - FEDORA
-# ================================
-
-# Auto-detect second ethernet
-INTERFACE=$(nmcli -t -f NAME,TYPE connection show | awk -F: '$2=="ethernet"{print $1}' | sed -n '2p')
-
-if [ -z "$INTERFACE" ]; then
-    INTERFACE=$(nmcli -t -f NAME,TYPE connection show | awk -F: '$2=="ethernet"{print $1}' | head -n1)
-fi
-
-if [ -z "$INTERFACE" ]; then
-    echo "[FATAL] No se detectaron interfaces ethernet"
-    nmcli device status
+if ! nmcli dev status | grep -q "^$INTERFACE"; then
+    echo "[FATAL] La interfaz $INTERFACE no existe"
     exit 1
 fi
+
 
 validate_ip() {
     [[ $1 =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]
