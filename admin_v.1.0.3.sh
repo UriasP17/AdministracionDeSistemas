@@ -1,12 +1,8 @@
 #!/bin/bash
 
-INTERFACE=$(nmcli -t -f NAME,TYPE connection show | grep ethernet | sed -n '2p' | cut -d: -f1)
+SERVER_IP=$(ip -4 addr show "$INTERFACE" | awk '/inet /{print $2}' | cut -d/ -f1)
+NET_BASE=$(echo $SERVER_IP | cut -d'.' -f1-3)
 
-if [ -z "$INTERFACE" ]; then
-    echo "[ERROR] No se pudo detectar la segunda interfaz ethernet"
-    nmcli device status
-    exit 1
-fi
 validate_ip() {
     [[ $1 =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]
 }
