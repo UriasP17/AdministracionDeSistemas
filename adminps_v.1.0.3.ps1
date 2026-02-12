@@ -1,11 +1,17 @@
-# --- BÚSQUEDA AUTOMÁTICA DE INTERFAZ ---
-$adapter = Get-NetAdapter | Where-Object { $_.Status -eq "Up" } | Select-Object -First 1
+# --- BÚSQUEDA ESPECÍFICA DE "ETHERNET 2" ---
+$adapter = Get-NetAdapter | Where-Object { $_.Name -eq "Ethernet 2" } | Select-Object -First 1
 
 if (-not $adapter) {
-    Write-Host "No encontré adaptadores activos." -ForegroundColor Yellow
-    Get-NetAdapter | Select-Object Name, InterfaceDescription, Status
-    $nombreManual = Read-Host "Escribe el nombre EXACTO de la interfaz (ej: Ethernet)"
-    $adapter = Get-NetAdapter -Name $nombreManual
+    # Si no encuentra "Ethernet 2", busca cualquiera activa como respaldo
+    Write-Host "No encontré 'Ethernet 2'. Buscando otras..." -ForegroundColor Yellow
+    $adapter = Get-NetAdapter | Where-Object { $_.Status -eq "Up" } | Select-Object -First 1
+    
+    if (-not $adapter) {
+        Write-Host "No encontré adaptadores activos." -ForegroundColor Red
+        Get-NetAdapter | Select-Object Name, InterfaceDescription, Status
+        $nombreManual = Read-Host "Escribe el nombre EXACTO de la interfaz (ej: Ethernet)"
+        $adapter = Get-NetAdapter -Name $nombreManual
+    }
 }
 
 $INTERFACE = $adapter.Name
