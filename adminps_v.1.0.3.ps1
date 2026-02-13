@@ -56,7 +56,13 @@ function Configure-Network {
     Remove-NetRoute -InterfaceAlias $INTERFACE -Confirm:$false -ErrorAction SilentlyContinue
     
     New-NetIPAddress -InterfaceAlias $INTERFACE -IPAddress $IPAddress -PrefixLength $Prefix -ErrorAction Stop
+    
+    netsh interface ipv4 set interface "$INTERFACE" weakhostreceive=enabled
+    netsh interface ipv4 set interface "$INTERFACE" weakhostsend=enabled
+    
+    Write-Host "[WEAK HOST HABILITADO] Broadcasts ahora funcionan en VMs" -ForegroundColor Green
 }
+
 
 function Install-DHCP {
     Write-Host -NoNewline "Instalando rol DHCP... " -ForegroundColor Yellow
