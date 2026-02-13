@@ -90,13 +90,16 @@ function Setup-DHCPScope {
         -State Active
     
     Set-DhcpServerv4OptionValue -ScopeId $SubnetID -Router $ServerIP
-    
     Set-DhcpServerv4OptionValue -ScopeId $SubnetID -DnsServer "8.8.8.8", "1.1.1.1"
-  
-    Add-DhcpServerInDC -DnsName $env:COMPUTERNAME -IPAddress $ServerIP -ErrorAction SilentlyContinue
     
-    Add-DhcpServerv4Binding -BindingState $true -IPAddress $ServerIP -ErrorAction SilentlyContinue
+    Set-DhcpServerv4Binding -BindingState $true -InterfaceAlias $INTERFACE -ErrorAction SilentlyContinue
+    
+    New-NetFirewallRule -DisplayName "DHCP Server $ScopeName" -Direction Inbound -LocalPort 67 -Protocol UDP -Action Allow -ErrorAction SilentlyContinue
+    New-NetFirewallRule -DisplayName "DHCP Client $ScopeName" -Direction Outbound -LocalPort 68 -Protocol UDP -Action Allow -ErrorAction SilentlyContinue
+    
+    Write-Host "[FIREWALL ABIERTO] Puertos 67/68 liberados" -ForegroundColor Green
 }
+
 
 function Clear-AllLeases {
     Write-Host "`n--- ELIMINANDO LEASES Y RESETEANDO ---" -ForegroundColor Yellow
