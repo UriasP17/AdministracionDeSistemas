@@ -1,113 +1,171 @@
-function Validar-IP ($ip) {
-    if ($ip -eq "0.0.0.0" -or $ip -eq "255.255.255.255" -or $ip -eq "127.0.0.1") { return $false }
-    return $ip -match "^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
+Write-Host "Buscando 'Ethernet 2'..." -ForegroundColor Gray
+$adapter = Get-NetAdapter | Where-Object { $_.Name -eq "Ethernet 2" } | Select-Object -First 1
+
+if (-not $adapter) {
+    Write-Host "No vi la 'Ethernet 2', agarrando la primera que sirva..." -ForegroundColor Yellow
+    $adapter = Get-NetAdapter | Where-Object { $_.Status -eq "Up" } | Select-Object -First 1
+    
+    if (-not $adapter) {
+        Write-Host "No hay red, checa eso." -ForegroundColor Red
+        $nombreManual = Read-Host "Pon el nombre de la interfaz tu mismo"
+        $adapter = Get-NetAdapter -Name $nombreManual -ErrorAction Stop
+    }
 }
 
-function IP-A-Numero ($ip) {
+$INTERFACE = $adapter.Name
+Write-Host "Usando: '$INTERFACE'" -ForegroundColor Cyan
+Start-Sleep -Seconds 1
+
+function Validar-IP {
+    param([string]$IP)
+    if ($IP -eq "0.0.0.0" -or $IP -eq "255.255.255.255") { return $false }
+    return $IP -match '^([0-9]{1,3}\.){3}[0-9]{1,3}$'
+}
+
+function IP-A-Numero {
+    param([string]$ip)
     $octetos = $ip.Split('.')
-    return [double]($octetos[0]) * [math]::Pow(256, 3) + [double]($octetos[1]) * [math]::Pow(256, 2) + [double]($octetos[2]) * 256 + [double]($octetos[3])
+    return [double]([int]$octetos[0] * 16777216 + [int]$octetos[1] * 65536 + [int]$octetos[2] * 256 + [int]$octetos[3])
 }
 
-function Menu-DHCP {
+function Get-IPClassInfo {
+    param([string]$IP)
+    $parts = $IP -split '\.'
+    if ($parts.Count -lt 4) { return $null }
+    $Octet1 = [int]$parts[0]
+
+    if ($Octet1 -ge 1 -and $Octet1 -le 126) { return @{ Class="A"; Mask="255.0.0.0"; Prefix=8; Subnet="$Octet1.0.0.0" } }
+    elseif ($Octet1 -ge 128 -and $Octet1 -le 191) { return @{ Class="B"; Mask="255.255.0.0"; Prefix=16; Subnet="$Octet1.$($parts[1]).0.0" } }
+    elseif ($Octet1 -ge 192 -and $Octet1 -le 223) { return @{ Class="C"; Mask="255.255.255.0"; Prefix=24; Subnet="$Octet1.$($parts[1]).$($parts[2]).0" } }
+    else { return $null }
+}
+
+function Configure-Network {
+    param([string]$IPAddress, [int]$Prefix)
+    Write-Host "Poniendo IP $IPAddress en '$INTERFACE'..." -ForegroundColor Yellow
+    Remove-NetIPAddress -InterfaceAlias $INTERFACE -Confirm:$false -ErrorAction SilentlyContinue
+    New-NetIPAddress -InterfaceAlias $INTERFACE -IPAddress $IPAddress -PrefixLength $Prefix -ErrorAction Stop
+    
+    netsh interface ipv4 set interface "$INTERFACE" weakhostreceive=enabled
+    netsh interface ipv4 set interface "$INTERFACE" weakhostsend=enabled
+    Write-Host "Listo el weak host." -ForegroundColor Green
+}
+
+function Setup-DHCPScope {
+    param($ServerIP, $StartRange, $EndRange, $SubnetMask, $SubnetID)
+    $ScopeName = "Scope_$SubnetID"
+    
+    Write-Host "Armando ambito $ScopeName..." -ForegroundColor Cyan
+    Get-DhcpServerv4Scope | Remove-DhcpServerv4Scope -Force -ErrorAction SilentlyContinue
+    
+    Add-DhcpServerv4Scope -Name $ScopeName -StartRange $StartRange -EndRange $EndRange -SubnetMask $SubnetMask -State Active
+    Set-DhcpServerv4OptionValue -ScopeId $SubnetID -Router $ServerIP
+    Set-DhcpServerv4OptionValue -ScopeId $SubnetID -DnsServer $ServerIP, "8.8.8.8"
+    
+    Set-DhcpServerv4Binding -BindingState $true -InterfaceAlias $INTERFACE -ErrorAction SilentlyContinue
+    New-NetFirewallRule -DisplayName "DHCP-IN" -Direction Inbound -LocalPort 67 -Protocol UDP -Action Allow -ErrorAction SilentlyContinue
+    New-NetFirewallRule -DisplayName "DHCP-OUT" -Direction Outbound -LocalPort 68 -Protocol UDP -Action Allow -ErrorAction SilentlyContinue
+    Write-Host "Firewall abierto." -ForegroundColor Green
+}
+
+function Show-Menu {
     Clear-Host
-    Write-Host " -----  DHCP WINDOWS SERVER -----" -ForegroundColor Cyan
-    Write-Host "[1] Verificar estado del Rol DHCP"
-    Write-Host "[2] Instalar/Desinstalar Rol"
-    Write-Host "[3] Configurar Servidor"
-    Write-Host "[4] Monitorear Leases"
-    Write-Host "[5] Salir"
-    return Read-Host "`nSeleccione una opcion"
+    Write-Host "----------------------------------" -ForegroundColor Cyan
+    Write-Host "    DHCP MANAGER ($INTERFACE)" -ForegroundColor Cyan
+    Write-Host "----------------------------------" -ForegroundColor Cyan
+    Write-Host "[1] Ver Rol"
+    Write-Host "[2] Instalar/Quitar Rol"
+    Write-Host "[3] Configurar Server"
+    Write-Host "[4] Ver Clientes"
+    Write-Host "[5] Limpiar Clientes"
+    Write-Host "[6] Salir"
+    Write-Host "----------------------------------" -ForegroundColor Cyan
 }
 
-do {
-    $opcion = Menu-DHCP
-    switch ($opcion) {
+while ($true) {
+    Show-Menu
+    $opt = Read-Host "Que hacemos"
+    
+    switch ($opt) {
         "1" {
-            $status = Get-WindowsFeature DHCP
-            Write-Host "`nEstado del rol: $($status.InstallState)" -ForegroundColor Yellow
+            $s = Get-WindowsFeature DHCP
+            Write-Host "`nEstado: $($s.InstallState)" -ForegroundColor Yellow
+            try { 
+                if ((Get-Service dhcpserver).Status -eq "Running") { Write-Host "Servicio: JALANDO" -ForegroundColor Green }
+                else { Write-Host "Servicio: PARADO" -ForegroundColor Red }
+            } catch { Write-Host "Ni esta instalado." -ForegroundColor DarkGray }
             Pause
         }
+        
         "2" {
-            $status = Get-WindowsFeature DHCP
-            $accion = Read-Host "Escriba 'I' para Instalar o 'D' para Desinstalar"
-            if ($accion -eq 'I') {
-                if ($status.InstallState -eq "Installed") { Write-Host "Ya instalado." -ForegroundColor Yellow }
-                else { Install-WindowsFeature DHCP -IncludeManagementTools }
+            $s = Get-WindowsFeature DHCP
+            if ($s.InstallState -eq "Installed") {
+                if ((Read-Host "¿Lo quito? (S/N)") -eq "S") {
+                    Uninstall-WindowsFeature DHCP -IncludeManagementTools
+                }
+            } else {
+                Write-Host "Instalando..." -ForegroundColor Yellow
+                Install-WindowsFeature DHCP -IncludeManagementTools | Out-Null
+                Add-DhcpServerSecurityGroup -ErrorAction SilentlyContinue
+                Restart-Service dhcpserver
+                Write-Host "Ya quedo." -ForegroundColor Green
             }
-            elseif ($accion -eq 'D') { Uninstall-WindowsFeature DHCP -IncludeManagementTools }
             Pause
         }
+        
         "3" {
-            if ((Get-WindowsFeature DHCP).InstallState -ne "Installed") {
-                Write-Host "Error: Instale el rol primero." -ForegroundColor Red ; Pause ; break
-            }
+            Write-Host "`n--- CONFIGURACION ---" -ForegroundColor Yellow
             
-            $nombreAmbito = Read-Host "Nombre del nuevo Ambito"
-            do { $ipServer = Read-Host "IP Inicial (Servidor)" } until (Validar-IP $ipServer)
-
-            $partes = $ipServer.Split('.')
-            $primerOcteto = [int]$partes[0]
-            if ($primerOcteto -le 126) { $mascara = "255.0.0.0" ; $prefix = 8 }
-            elseif ($primerOcteto -le 191) { $mascara = "255.255.0.0" ; $prefix = 16 }
-            else { $mascara = "255.255.255.0" ; $prefix = 24 }
-
-            $adapter = Get-NetAdapter | Where-Object { $_.Status -eq "Up" } | Select-Object -First 1
-            if ($adapter) {
-                $adapter | Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
-                $adapter | New-NetIPAddress -IPAddress $ipServer -PrefixLength $prefix -ErrorAction SilentlyContinue | Out-Null
-                Write-Host "Servidor configurado en $ipServer" -ForegroundColor Green
-            }
-
-            $ipInicio = "$($partes[0]).$($partes[1]).$($partes[2]).$([int]$partes[3] + 1)"
-            $numInicio = IP-A-Numero $ipInicio
-            $numServer = IP-A-Numero $ipServer
-
+            do { $ServerIP = Read-Host "IP del Server (ej: 10.0.0.1)" } until (Validar-IP $ServerIP)
+            
+            $ClassInfo = Get-IPClassInfo -IP $ServerIP
+            if (-not $ClassInfo) { Write-Host "Esa IP no me sirve." -ForegroundColor Red; Pause; continue }
+            
+            $Octets = $ServerIP -split '\.'
+            $BaseIP = "$($Octets[0]).$($Octets[1]).$($Octets[2])"
+            $StartRange = "$BaseIP.$([int]$Octets[3] + 1)"
+            
+            Write-Host "Es Clase $($ClassInfo.Class). Empieza en $StartRange" -ForegroundColor Gray
+            
             do {
-                $ipFinal = Read-Host "IP Final del rango para clientes"
-                $valido = (Validar-IP $ipFinal)
-                
+                $EndIP = Read-Host "IP Final (ej: 10.0.0.50)"
+                $valido = (Validar-IP $EndIP)
                 if ($valido) {
-                    $numFinal = IP-A-Numero $ipFinal
+                    $nStart = IP-A-Numero $StartRange
+                    $nEnd = IP-A-Numero $EndIP
+                    $nServer = IP-A-Numero $ServerIP
                     
-                    if ($numFinal -eq $numServer) {
-                        Write-Host "Error: La IP final no puede ser la misma IP del Servidor ($ipServer)." -ForegroundColor Red
-                        $valido = $false
-                    }
-                    elseif ($numFinal -lt $numInicio) {
-                        Write-Host "Error: La IP final ($ipFinal) debe ser MAYOR a la inicial ($ipInicio)." -ForegroundColor Red
-                        $valido = $false
-                    }
+                    if ($nEnd -le $nStart) { Write-Host "La final debe ser mayor a la inicial" -ForegroundColor Red; $valido = $false }
+                    if ($nEnd -eq $nServer) { Write-Host "No pongas la misma del server" -ForegroundColor Red; $valido = $false }
                 }
             } until ($valido)
 
-            do {
-                $secInput = Read-Host "Lease Time (segundos)"
-                if ($secInput -match "^\d+$" -and [int]$secInput -gt 0) {
-                    $leaseSec = [int]$secInput
-                    $validoSec = $true
-                } else {
-                    Write-Host "Error: Ingrese un numero entero de segundos valido." -ForegroundColor Red
-                    $validoSec = $false
-                }
-            } until ($validoSec)
-
-            $gw = Read-Host "Gateway (Enter para saltar)"
-            $dns = Read-Host "DNS (Enter para saltar)"
-
             try {
-                Add-DhcpServerv4Scope -Name $nombreAmbito -StartRange $ipInicio -EndRange $ipFinal -SubnetMask $mascara -LeaseDuration ([TimeSpan]::FromSeconds($leaseSec)) | Out-Null
-                if ($gw) { Set-DhcpServerv4OptionValue -Router $gw -Force | Out-Null }
-                if ($dns) { Set-DhcpServerv4OptionValue -DnsServer $dns -Force | Out-Null }
-                Write-Host "Ambito '$nombreAmbito' activado exitosamente." -ForegroundColor Green
-            } catch { Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red }
-            Pause
-        }
-        "4" {
-            Get-DhcpServerv4Scope | ForEach-Object {
-                Write-Host "Red: $($_.ScopeId)" -ForegroundColor Yellow
-                Get-DhcpServerv4Lease -ScopeId $_.ScopeId | Select-Object IPAddress, HostName, LeaseExpiryTime | Format-Table -AutoSize
+                Configure-Network -IPAddress $ServerIP -Prefix $ClassInfo.Prefix
+                Setup-DHCPScope -ServerIP $ServerIP -StartRange $StartRange -EndRange $EndIP -SubnetMask $ClassInfo.Mask -SubnetID $ClassInfo.Subnet
+                Write-Host "`nTodo listo." -ForegroundColor Green
+            } catch {
+                Write-Host "Algo trono: $($_.Exception.Message)" -ForegroundColor Red
             }
             Pause
         }
+        
+        "4" {
+            Write-Host "`n--- CLIENTES ---" -ForegroundColor Cyan
+            try {
+                Get-DhcpServerv4Scope | Get-DhcpServerv4Lease | Format-Table IPAddress, HostName, ClientId -AutoSize
+            } catch { Write-Host "Nada por aqui." -ForegroundColor Gray }
+            Pause
+        }
+        
+        "5" {
+            Write-Host "Borrando leases..." -ForegroundColor Yellow
+            Get-DhcpServerv4Scope | Get-DhcpServerv4Lease | Remove-DhcpServerv4Lease -Force
+            Restart-Service dhcpserver
+            Write-Host "Limpio." -ForegroundColor Green
+            Pause
+        }
+        
+        "6" { exit }
     }
-} while ($opcion -ne "5")
+}
