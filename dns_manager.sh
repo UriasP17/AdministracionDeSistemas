@@ -228,3 +228,23 @@ mostrar_menu() {
     echo "6) Salir"
     echo "============================="
 }
+
+menu_interactivo() {
+    while true; do
+        mostrar_menu
+        read -p "Selecciona una opción: " opcion
+
+        case $opcion in
+            1) verificar_instalacion ;;
+            2) instalar_dependencias ;;
+            3) listar_dominios ;;
+            4) agregar_dominio ;;
+            5) eliminar_dominio ;;
+            6) echo "Saliendo..."; exit 0 ;;
+            *) echo "Opción inválida, por favor elige un número del 1 al 6." ;;
+        esac
+    done
+}
+
+
+menu_interactivo
