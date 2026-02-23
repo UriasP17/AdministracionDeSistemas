@@ -112,6 +112,9 @@ www     IN  CNAME   $DOMINIO.
 EOF"
             sudo chown root:named $ZONE_FILE
             sudo restorecon -Rv $ZONE_FILE >/dev/null 2>&1
+            sudo touch /etc/named.rfc1912.zones
+            sudo chown root:named /etc/named.rfc1912.zones
+            
             if ! grep -q "zone \"$DOMINIO\"" /etc/named.rfc1912.zones; then
                 sudo bash -c "cat <<EOF >> /etc/named.rfc1912.zones
 
@@ -166,13 +169,15 @@ EOF"
             sudo systemctl stop named 2>/dev/null
             sudo dnf remove -y bind bind-utils >/dev/null 2>&1
             sudo rm -f /var/named/*.zone
-            sudo sed -i '/zone ".*" IN {/,/};/d' /etc/named.rfc1912.zones
+        
+            [ -f /etc/named.rfc1912.zones ] && sudo sed -i '/zone ".*" IN {/,/};/d' /etc/named.rfc1912.zones
             [ -f /etc/named.conf.bak ] && sudo mv /etc/named.conf.bak /etc/named.conf
             sudo firewall-cmd --permanent --remove-service=dns >/dev/null 2>&1
             sudo firewall-cmd --reload >/dev/null 2>&1
             echo -e "\e[32mBye.\e[0m"
             read -p "Dale Enter..."
         ;;
+
 
         7) exit ;;
     esac
