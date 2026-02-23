@@ -1,184 +1,230 @@
 #!/bin/bash
-INTERFACE="enp0s8"
 
-if ! nmcli dev status | grep -q "^$INTERFACE"; then
-    echo -e "\e[33m[WARN] No veo la $INTERFACE.\e[0m"
-    ACTIVE_IF=$(nmcli -t -f DEVICE,STATE dev | grep ":connected" | head -n1 | cut -d: -f1)
-    if [ -n "$ACTIVE_IF" ]; then
-        INTERFACE="$ACTIVE_IF"
-        echo -e "\e[36m--> Agarrando esta activa: $INTERFACE\e[0m"
-        sleep 2
+check_package_present() {
+    rpm -q "$1" &>/dev/null
+}
+
+install_required_package() {
+    sudo dnf install -y "$1" >/dev/null 2>&1
+}
+
+input() {
+    read -p "$1" val
+    echo "$val"
+}
+
+verificar_instalacion() {
+    echo "Verificando instalación de DNS Server..."
+    if check_package_present "bind"; then
+        echo "[OK] DNS service está instalado"
     else
-        echo -e "\e[31m[FATAL] No hay red.\e[0m"
+        echo "[Error] DNS service NO está instalado"
+    fi
+
+    verificar_setup
+}
+
+verificar_setup() {
+    echo "Verificando configuración del servidor DNS..."
+
+    if grep -q "allow-query { any; };" /etc/named.conf &&
+       grep -q "listen-on port 53 { any; };" /etc/named.conf &&
+       grep -q "listen-on-v6 port 53 { none; };" /etc/named.conf; then
+
+        echo "[OK] Configuración de named.conf ya tiene allow-query y listen configurados"
+
+    else
+        echo "Actualizando bloque options en named.conf..."
+
+        sudo sed -i '
+/^[[:space:]]*options[[:space:]]*{/ {
+    :a
+    n
+    /^[[:space:]]*};/ b
+    /allow-query/d
+    /listen-on port/d
+    /listen-on-v6/d
+    ba
+}
+' /etc/named.conf
+
+        sudo sed -i '/^[[:space:]]*options[[:space:]]*{/a\
+    allow-query { any; };\
+    listen-on port 53 { any; };\
+    listen-on-v6 port 53 { none; };' /etc/named.conf
+
+        echo "[OK] Bloque options actualizado correctamente"
+    fi
+
+    # Validar configuración
+    if sudo named-checkconf /etc/named.conf; then
+        echo "[OK] Configuración de named.conf es válida"
+    else
+        echo "[Error] Configuración de named.conf es inválida"
         exit 1
     fi
-fi
 
-validate_ip() {
-    [[ $1 =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] && [[ $1 != "0.0.0.0" ]] && [[ $1 != "255.255.255.255" ]]
-}
 
-install_dns() {
-    echo -n "Instalando BIND9 (DNS)... "
-    if ! rpm -q bind &>/dev/null; then
-        sudo dnf install -y bind bind-utils >/dev/null 2>&1
-        echo -e "\e[32m[LISTO]\e[0m"
+    state_ip=$(ip -br addr show enp0s8 | awk '{print $2}')
+    ip_value=$(ip -br addr show enp0s8 | awk '{print $3}')
+
+    if [[ "$state_ip" == "UP" && -n "$ip_value" ]]; then
+        echo "[OK] Interfaz enp0s8 está activa y tiene IP asignada"
     else
-        echo -e "\e[33m[YA ESTABA]\e[0m"
+        echo "[Error] Interfaz enp0s8 no está activa o sin IP"
+
+        ip_new=$(input "Ingresa una dirección IP válida para la interfaz enp0s8: ")
+        prefix=$(input "Ingresa el prefijo de la máscara (ej. 24): ")
+
+        network=$(ipcalc -n $ip_new/$prefix | awk -F= '{print $2}')
+        mascara=$(ipcalc -m $ip_new/$prefix | awk -F= '{print $2}')
+
+        sudo ip addr add $ip_new/$prefix dev enp0s8
+        sudo route add -net $network netmask $mascara dev enp0s8
+
+        exit 1
     fi
-    sudo systemctl enable named >/dev/null 2>&1
+
+
+    if ! sudo firewall-cmd --list-services | grep -qw dns; then
+        sudo firewall-cmd --add-service=dns --permanent >/dev/null 2>&1
+        sudo firewall-cmd --reload >/dev/null 2>&1
+        echo "[OK] Servicio DNS agregado al firewall"
+    fi
+
+    sudo systemctl restart named
+    echo "[OK] Servicio named reiniciado"
+}
+
+instalar_dependencias() {
+    echo "Instalando dependencias..."
+    install_required_package "ipcalc"
+    install_required_package "bind-utils"
+
+    if ! check_package_present "bind"; then
+        install_required_package "bind"
+        if [[ $? -eq 0 ]]; then
+            echo "[OK] bind instalado correctamente"
+        else
+            echo "[Error] Fallo al instalar bind"
+            exit 1
+        fi
+    else
+        echo "bind ya está instalado"
+    fi
+
+    verificar_setup
+}
+
+listar_dominios() {
+    echo "Listando dominios configurados en el servidor DNS..."
+
+    path="/var/named"
+    zonas=$(ls $path/*.zone 2>/dev/null)
+
+    if [ -n "$zonas" ]; then
+        echo "Dominios configurados:"
+        for file in $zonas; do
+            echo "- $(basename "$file" .zone)"
+        done
+    else
+        echo "No se encontraron dominios configurados."
+    fi
+}
+
+agregar_dominio() {
+    echo "Agregando nuevo dominio al servidor DNS..."   
     
-    echo -e "\e[32mAbriendo firewall (TCP/UDP 53)...\e[0m"
-    sudo firewall-cmd --permanent --add-service=dns >/dev/null 2>&1
-    sudo firewall-cmd --reload >/dev/null 2>&1
-}
+    dominio=$(input "Ingresa el nombre del dominio a agregar: ")
+    while [[ -z "$dominio" ]]; do
+        echo "Error: El nombre del dominio no puede estar vacío"
+        dominio=$(input "Ingresa el nombre del dominio a agregar: ")
+    done  
 
-setup_dns() {
-   
-    if ! grep -q "allow-query.*any;" /etc/named.conf; then
-        sudo cp /etc/named.conf /etc/named.conf.bak
-        sudo sed -i -e 's/listen-on port 53 { 127.0.0.1; };/listen-on port 53 { any; };/g' /etc/named.conf
-        sudo sed -i -e 's/listen-on-v6 port 53 { ::1; };/listen-on-v6 port 53 { none; };/g' /etc/named.conf
-        sudo sed -i -e 's/allow-query     { localhost; };/allow-query     { any; };/g' /etc/named.conf
+    ip_dominio=$(input "Ingresa la IPv4 para el dominio (deja vacio para default server): ")
+
+
+    if [[ -z "$ip_dominio" ]]; then
+        ip_dominio=$(ip -br addr show enp0s8 | awk '{print $3}' | cut -d'/' -f1)
     fi
-}
 
-while true; do
-    clear
-    echo -e "\e[36m------------------------------------------\e[0m"
-    echo -e "\e[36m      DNS MANAGER - FEDORA ($INTERFACE)\e[0m"
-    echo -e "\e[36m------------------------------------------\e[0m"
-    echo "1. Instalar Server"
-    echo "2. Ver Estado"
-    echo "3. Configurar Dominio"
-    echo "4. Ver Dominios"
-    echo "5. Borrar Dominio"
-    echo "6. Desinstalar"
-    echo "7. Salir"
-    echo -e "\e[36m------------------------------------------\e[0m"
-    read -p "Opcion: " opt
+    # Rutas de Fedora
+    zone_file="/var/named/$dominio.zone"
+    name_file="named.rfc1912.zones"
 
-    case $opt in
-        1)
-            install_dns
-            setup_dns
-            sudo systemctl start named
-            read -p "Dale Enter..."
-        ;;
+    sudo touch $zone_file
 
-        2)
-            systemctl status named --no-pager
-            read -p "Dale Enter..."
-        ;;
-
-        3)
-            echo -e "\n\e[33m--- CONFIGURACION ---\e[0m"
-            
-            read -p "Nombre del dominio: " DOMINIO
-            if [ -z "$DOMINIO" ]; then
-                echo -e "\e[31mEl dominio no puede estar vacio.\e[0m"
-                read -p "Dale Enter..."
-                continue
-            fi
-            
-            while true; do
-                read -p "IP de ESTE servidor DNS (ej: 192.168.1.10): " SERVER_IP
-                if validate_ip "$SERVER_IP"; then break; fi
-                echo -e "\e[31mEsa IP no sirve.\e[0m"
-            done
-
-            while true; do
-                read -p "IP del Cliente (Hacia donde apuntara $DOMINIO): " CLIENT_IP
-                if validate_ip "$CLIENT_IP"; then break; fi
-                echo -e "\e[31mEsa IP no sirve.\e[0m"
-            done
-
-            ZONE_FILE="/var/named/$DOMINIO.zone"
-
-        
-            sudo bash -c "cat <<'EOF' > $ZONE_FILE
-\$TTL 86400
-@   IN  SOA     ns1.$DOMINIO. admin.$DOMINIO. (
-                    2026022101 ; Serial
-                    3600       ; Refresh
-                    1800       ; Retry
-                    604800     ; Expire
-                    86400      ; Minimum TTL
-)
-@       IN  NS      ns1.$DOMINIO.
-ns1     IN  A       $SERVER_IP
-@       IN  A       $CLIENT_IP
-www     IN  CNAME   $DOMINIO.
+    sudo bash -c "cat <<EOF > $zone_file
+\$TTL 604800
+@ IN SOA ns.$dominio. root.$dominio. (
+    2;
+    604800;
+    86400;
+    2419200;
+    604800)
+;
+@ IN NS ns.$dominio.
+ns IN A $ip_dominio
+@ IN A $ip_dominio
+www IN CNAME $dominio.
 EOF"
-            sudo chown root:named $ZONE_FILE
-            sudo restorecon -Rv $ZONE_FILE >/dev/null 2>&1
-            sudo touch /etc/named.rfc1912.zones
-            sudo chown root:named /etc/named.rfc1912.zones
-            
-            if ! grep -q "zone \"$DOMINIO\"" /etc/named.rfc1912.zones; then
-                sudo bash -c "cat <<EOF >> /etc/named.rfc1912.zones
 
-zone \"$DOMINIO\" IN {
+    sudo chown root:named $zone_file
+    sudo restorecon -Rv $zone_file >/dev/null 2>&1
+
+    if ! grep -q "zone \"$dominio\"" /etc/$name_file; then
+        sudo bash -c "cat <<EOF >> /etc/$name_file
+zone \"$dominio\" IN {
     type master;
-    file \"$ZONE_FILE\";
+    file \"$zone_file\";
     allow-update { none; };
 };
 EOF"
-            fi
+    fi
+
+    sudo systemctl restart named
+    echo "Dominio agregado correctamente."
+}
+
+eliminar_dominio() {
+    echo "Eliminando un dominio del servidor DNS" 
+
+    zonas=$(ls /var/named/*.zone 2>/dev/null)
+    if [ -n "$zonas" ]; then
+        echo "Dominios configurados:"
+        for file in $zonas; do
+            echo "- $(basename "$file" .zone)"
+        done
+
+        dominio=$(input "Ingresa el nombre del dominio a eliminar: ")
+        
+        zone_file="/var/named/$dominio.zone"
+        name_file="named.rfc1912.zones"
+
+        if [ -f "$zone_file" ]; then
+            sudo rm -f "$zone_file"
+
+            sudo cp /etc/$name_file /etc/$name_file.bak
+            sudo sed -i "/zone \"$dominio\" IN {/,/};/d" /etc/$name_file 
 
             sudo systemctl restart named
-            
-            if systemctl is-active --quiet named; then
-                echo -e "\n\e[32mTodo listo! $DOMINIO apunta a $CLIENT_IP.\e[0m"
-            else
-                echo -e "\n\e[31mTrono algo. Checa journalctl -xeu named.\e[0m"
-            fi
-            read -p "Dale Enter..."
-        ;;
+            echo "Dominio eliminado."
+        else
+            echo "El dominio no existe."
+        fi
+    else
+        echo "No hay dominios para eliminar."
+    fi      
+}
 
-        4)
-            echo -e "\n\e[36m------ DOMINIOS ------\e[0m"
-            DOMINIOS=$(ls /var/named/*.zone 2>/dev/null)
-            if [ -n "$DOMINIOS" ]; then
-                for f in $DOMINIOS; do
-                    basename "$f" .zone
-                done
-            else
-                echo "Nada aun."
-            fi
-            read -p "Dale Enter..."
-        ;;
-
-        5)
-            echo -e "\n\e[33m--- BORRAR DOMINIO ---\e[0m"
-            read -p "Cual dominio quieres borrar?: " DOMINIO
-            
-            if [ -f "/var/named/$DOMINIO.zone" ]; then
-                sudo rm -f "/var/named/$DOMINIO.zone"
-                sudo sed -i "/zone \"$DOMINIO\" IN {/,/};/d" /etc/named.rfc1912.zones
-                sudo systemctl restart named
-                echo -e "\e[32mLimpio. Se borro $DOMINIO.\e[0m"
-            else
-                echo -e "\e[31mEse dominio no existe.\e[0m"
-            fi
-            read -p "Dale Enter..."
-        ;;
-
-        6)
-            echo -e "\e[33mQuitando todo...\e[0m"
-            sudo systemctl stop named 2>/dev/null
-            sudo dnf remove -y bind bind-utils >/dev/null 2>&1
-            sudo rm -f /var/named/*.zone
-        
-            [ -f /etc/named.rfc1912.zones ] && sudo sed -i '/zone ".*" IN {/,/};/d' /etc/named.rfc1912.zones
-            [ -f /etc/named.conf.bak ] && sudo mv /etc/named.conf.bak /etc/named.conf
-            sudo firewall-cmd --permanent --remove-service=dns >/dev/null 2>&1
-            sudo firewall-cmd --reload >/dev/null 2>&1
-            echo -e "\e[32mBye.\e[0m"
-            read -p "Dale Enter..."
-        ;;
-
-
-        7) exit ;;
-    esac
-done
+mostrar_menu() {
+    echo ""
+    echo "========= MENÚ DNS ========="
+    echo "1) Verificar instalación"
+    echo "2) Instalar dependencias"
+    echo "3) Listar Dominios configurados"
+    echo "4) Agregar nuevo dominio"
+    echo "5) Eliminar un dominio"
+    echo "6) Salir"
+    echo "============================="
+}
