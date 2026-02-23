@@ -96,7 +96,7 @@ while true; do
             ZONE_FILE="/var/named/$DOMINIO.zone"
 
         
-            sudo bash -c "cat <<EOF > $ZONE_FILE
+            sudo bash -c "cat <<'EOF' > $ZONE_FILE
 \$TTL 86400
 @   IN  SOA     ns1.$DOMINIO. admin.$DOMINIO. (
                     2026022101 ; Serial
