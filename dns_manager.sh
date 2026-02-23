@@ -143,7 +143,6 @@ agregar_dominio() {
 
     ip_dominio=$(input "Ingresa la IPv4 para el dominio (deja vacio para default server): ")
 
-
     if [[ -z "$ip_dominio" ]]; then
         ip_dominio=$(ip -br addr show enp0s8 | awk '{print $3}' | cut -d'/' -f1)
     fi
@@ -152,39 +151,44 @@ agregar_dominio() {
     zone_file="/var/named/$dominio.zone"
     name_file="named.rfc1912.zones"
 
-    sudo touch $zone_file
+    sudo touch "$zone_file"
 
-    sudo bash -c "cat <<EOF > $zone_file
-\$TTL 604800
-@ IN SOA ns.$dominio. root.$dominio. (
-    2;
-    604800;
-    86400;
-    2419200;
-    604800)
-;
-@ IN NS ns.$dominio.
-ns IN A $ip_dominio
-@ IN A $ip_dominio
-www IN CNAME $dominio.
-EOF"
+    # Escribimos el archivo de zona de manera 100% segura usando echo
+    sudo bash -c "echo '\$TTL 604800' > \"$zone_file\""
+    sudo bash -c "echo '@ IN SOA ns.$dominio. root.$dominio. (' >> \"$zone_file\""
+    sudo bash -c "echo '    2;' >> \"$zone_file\""
+    sudo bash -c "echo '    604800;' >> \"$zone_file\""
+    sudo bash -c "echo '    86400;' >> \"$zone_file\""
+    sudo bash -c "echo '    2419200;' >> \"$zone_file\""
+    sudo bash -c "echo '    604800)' >> \"$zone_file\""
+    sudo bash -c "echo ';' >> \"$zone_file\""
+    sudo bash -c "echo '@ IN NS ns.$dominio.' >> \"$zone_file\""
+    sudo bash -c "echo 'ns IN A $ip_dominio' >> \"$zone_file\""
+    sudo bash -c "echo '@ IN A $ip_dominio' >> \"$zone_file\""
+    sudo bash -c "echo 'www IN CNAME $dominio.' >> \"$zone_file\""
 
-    sudo chown root:named $zone_file
-    sudo restorecon -Rv $zone_file >/dev/null 2>&1
+    sudo chown root:named "$zone_file"
+    sudo restorecon -Rv "$zone_file" >/dev/null 2>&1
 
+    # Inyectamos de manera segura en rfc1912.zones
     if ! grep -q "zone \"$dominio\"" /etc/$name_file; then
-        sudo bash -c "cat <<EOF >> /etc/$name_file
-zone \"$dominio\" IN {
-    type master;
-    file \"$zone_file\";
-    allow-update { none; };
-};
-EOF"
+        sudo bash -c "echo '' >> /etc/$name_file"
+        sudo bash -c "echo 'zone \"$dominio\" IN {' >> /etc/$name_file"
+        sudo bash -c "echo '    type master;' >> /etc/$name_file"
+        sudo bash -c "echo '    file \"$zone_file\";' >> /etc/$name_file"
+        sudo bash -c "echo '    allow-update { none; };' >> /etc/$name_file"
+        sudo bash -c "echo '};' >> /etc/$name_file"
     fi
 
     sudo systemctl restart named
-    echo "Dominio agregado correctamente."
+    
+    if systemctl is-active --quiet named; then
+        echo "Dominio agregado y DNS reiniciado correctamente."
+    else
+        echo "Error: el servicio DNS falló. Checa journalctl -xeu named"
+    fi
 }
+
 
 eliminar_dominio() {
     echo "Eliminando un dominio del servidor DNS" 
