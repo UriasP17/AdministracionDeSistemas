@@ -27,34 +27,23 @@ verificar_instalacion() {
 verificar_setup() {
     echo "Verificando configuración del servidor DNS..."
 
-    if grep -q "allow-query { any; };" /etc/named.conf &&
-       grep -q "listen-on port 53 { any; };" /etc/named.conf &&
-       grep -q "listen-on-v6 port 53 { none; };" /etc/named.conf; then
+    # Arreglamos si hay líneas duplicadas por errores pasados
+    sudo sed -i '/allow-query { any; };/d' /etc/named.conf
+    sudo sed -i '/listen-on port 53 { any; };/d' /etc/named.conf
+    sudo sed -i '/listen-on-v6 port 53 { none; };/d' /etc/named.conf
+    
+    # Nos aseguramos de que no esté el localhost default
+    sudo sed -i -e 's/listen-on port 53 { 127.0.0.1; };//g' /etc/named.conf
+    sudo sed -i -e 's/listen-on-v6 port 53 { ::1; };//g' /etc/named.conf
+    sudo sed -i -e 's/allow-query     { localhost; };//g' /etc/named.conf
 
-        echo "[OK] Configuración de named.conf ya tiene allow-query y listen configurados"
-
-    else
-        echo "Actualizando bloque options en named.conf..."
-
-        sudo sed -i '
-/^[[:space:]]*options[[:space:]]*{/ {
-    :a
-    n
-    /^[[:space:]]*};/ b
-    /allow-query/d
-    /listen-on port/d
-    /listen-on-v6/d
-    ba
-}
-' /etc/named.conf
-
-        sudo sed -i '/^[[:space:]]*options[[:space:]]*{/a\
+    # Inyectamos de manera segura en el bloque options
+    sudo sed -i '/^[[:space:]]*options[[:space:]]*{/a\
     allow-query { any; };\
     listen-on port 53 { any; };\
     listen-on-v6 port 53 { none; };' /etc/named.conf
 
-        echo "[OK] Bloque options actualizado correctamente"
-    fi
+    echo "[OK] Bloque options actualizado correctamente"
 
     # Validar configuración
     if sudo named-checkconf /etc/named.conf; then
@@ -63,7 +52,6 @@ verificar_setup() {
         echo "[Error] Configuración de named.conf es inválida"
         exit 1
     fi
-
 
     state_ip=$(ip -br addr show enp0s8 | awk '{print $2}')
     ip_value=$(ip -br addr show enp0s8 | awk '{print $3}')
@@ -81,10 +69,7 @@ verificar_setup() {
 
         sudo ip addr add $ip_new/$prefix dev enp0s8
         sudo route add -net $network netmask $mascara dev enp0s8
-
-        exit 1
     fi
-
 
     if ! sudo firewall-cmd --list-services | grep -qw dns; then
         sudo firewall-cmd --add-service=dns --permanent >/dev/null 2>&1
@@ -93,8 +78,18 @@ verificar_setup() {
     fi
 
     sudo systemctl restart named
-    echo "[OK] Servicio named reiniciado"
+    
+    # MOSTRAR EL ESTATUS EN VERDE
+    if systemctl is-active --quiet named; then
+        echo -e "\n\e[32m[OK] Servicio named reiniciado y está RUNNING.\e[0m"
+    else
+        echo -e "\n\e[31m[ERROR] El servicio named falló al iniciar. Revisa journalctl -xeu named\e[0m"
+    fi
+    
+    echo "----------------------------------------"
+    read -p "Presiona Enter para continuar..."
 }
+
 
 instalar_dependencias() {
     echo "Instalando dependencias..."
