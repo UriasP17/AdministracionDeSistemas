@@ -130,59 +130,59 @@ listar_dominios() {
 agregar_dominio() {
     echo "Agregando nuevo dominio al servidor DNS..."   
     
-    dominio=$(input "Ingresa el nombre del dominio a agregar: ")
+    read -p "Ingresa el nombre del dominio a agregar: " dominio
     while [[ -z "$dominio" ]]; do
         echo "Error: El nombre del dominio no puede estar vacío"
-        dominio=$(input "Ingresa el nombre del dominio a agregar: ")
+        read -p "Ingresa el nombre del dominio a agregar: " dominio
     done  
 
-    ip_dominio=$(input "Ingresa la IPv4 para el dominio (deja vacio para default server): ")
+    read -p "Ingresa la IPv4 para el dominio (deja vacio para usar la de enp0s8): " ip_dominio
 
     if [[ -z "$ip_dominio" ]]; then
         ip_dominio=$(ip -br addr show enp0s8 | awk '{print $3}' | cut -d'/' -f1)
     fi
 
-    # Rutas de Fedora
     zone_file="/var/named/$dominio.zone"
-    name_file="named.rfc1912.zones"
+    name_file="/etc/named.rfc1912.zones"
 
-    sudo touch "$zone_file"
+    echo "Creando archivo de zona: $zone_file ..."
+    
+    sudo bash -c "echo '\$TTL 604800' > $zone_file"
+    sudo bash -c "echo '@ IN SOA ns.$dominio. root.$dominio. (' >> $zone_file"
+    sudo bash -c "echo '    2' >> $zone_file"
+    sudo bash -c "echo '    604800' >> $zone_file"
+    sudo bash -c "echo '    86400' >> $zone_file"
+    sudo bash -c "echo '    2419200' >> $zone_file"
+    sudo bash -c "echo '    604800 )' >> $zone_file"
+    sudo bash -c "echo '@ IN NS ns.$dominio.' >> $zone_file"
+    sudo bash -c "echo 'ns IN A $ip_dominio' >> $zone_file"
+    sudo bash -c "echo '@ IN A $ip_dominio' >> $zone_file"
+    sudo bash -c "echo 'www IN CNAME $dominio.' >> $zone_file"
 
-    # Escribimos el archivo de zona de manera 100% segura usando echo
-    sudo bash -c "echo '\$TTL 604800' > \"$zone_file\""
-    sudo bash -c "echo '@ IN SOA ns.$dominio. root.$dominio. (' >> \"$zone_file\""
-    sudo bash -c "echo '    2;' >> \"$zone_file\""
-    sudo bash -c "echo '    604800;' >> \"$zone_file\""
-    sudo bash -c "echo '    86400;' >> \"$zone_file\""
-    sudo bash -c "echo '    2419200;' >> \"$zone_file\""
-    sudo bash -c "echo '    604800)' >> \"$zone_file\""
-    sudo bash -c "echo ';' >> \"$zone_file\""
-    sudo bash -c "echo '@ IN NS ns.$dominio.' >> \"$zone_file\""
-    sudo bash -c "echo 'ns IN A $ip_dominio' >> \"$zone_file\""
-    sudo bash -c "echo '@ IN A $ip_dominio' >> \"$zone_file\""
-    sudo bash -c "echo 'www IN CNAME $dominio.' >> \"$zone_file\""
+    sudo chown root:named $zone_file
+    sudo restorecon -Rv $zone_file >/dev/null 2>&1
 
-    sudo chown root:named "$zone_file"
-    sudo restorecon -Rv "$zone_file" >/dev/null 2>&1
+    echo "Registrando zona en $name_file ..."
 
-    # Inyectamos de manera segura en rfc1912.zones
-    if ! grep -q "zone \"$dominio\"" /etc/$name_file; then
-        sudo bash -c "echo '' >> /etc/$name_file"
-        sudo bash -c "echo 'zone \"$dominio\" IN {' >> /etc/$name_file"
-        sudo bash -c "echo '    type master;' >> /etc/$name_file"
-        sudo bash -c "echo '    file \"$zone_file\";' >> /etc/$name_file"
-        sudo bash -c "echo '    allow-update { none; };' >> /etc/$name_file"
-        sudo bash -c "echo '};' >> /etc/$name_file"
+    if ! grep -q "zone \"$dominio\"" $name_file; then
+        sudo bash -c "echo '' >> $name_file"
+        sudo bash -c "echo 'zone \"$dominio\" IN {' >> $name_file"
+        sudo bash -c "echo '    type master;' >> $name_file"
+        sudo bash -c "echo '    file \"$zone_file\";' >> $name_file"
+        sudo bash -c "echo '    allow-update { none; };' >> $name_file"
+        sudo bash -c "echo '};' >> $name_file"
     fi
 
-    sudo systemctl restart named
-    
-    if systemctl is-active --quiet named; then
-        echo "Dominio agregado y DNS reiniciado correctamente."
+
+    if sudo named-checkconf /etc/named.conf; then
+        sudo systemctl restart named
+        echo -e "\n\e[32m[ÉXITO] Dominio '$dominio' agregado y apuntando a '$ip_dominio'.\e[0m"
+        echo -e "\e[32mServicio DNS está RUNNING.\e[0m"
     else
-        echo "Error: el servicio DNS falló. Checa journalctl -xeu named"
+        echo -e "\n\e[31m[ERROR] Hubo un problema al configurar la zona. BIND no se reinició para proteger el sistema.\e[0m"
     fi
 }
+
 
 
 eliminar_dominio() {
