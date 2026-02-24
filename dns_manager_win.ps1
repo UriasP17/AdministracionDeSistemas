@@ -1,5 +1,5 @@
 if (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Write-Warning "¡Ocupas abrir PowerShell como Administrador para correr esto, bro!"
+    Write-Warning "Ocupas abrir PowerShell como Administrador para correr esto"
     Exit
 }
 
@@ -9,11 +9,11 @@ function Instalar-DNS {
     
     $dnsFeature = Get-WindowsFeature -Name DNS
     if ($dnsFeature.InstallState -ne "Installed") {
-        Write-Host "Instalando el rol... (esto puede tardar unos segundos)" -ForegroundColor Yellow
+        Write-Host "Instalando el rol... " -ForegroundColor Yellow
         Install-WindowsFeature -Name DNS -IncludeManagementTools | Out-Null
-        Write-Host "¡Servicio DNS instalado al 100!" -ForegroundColor Green
+        Write-Host "Servicio DNS instalado al 100!" -ForegroundColor Green
     } else {
-        Write-Host "El rol de DNS ya estaba instalado. No se movió nada." -ForegroundColor Green
+        Write-Host "El rol de DNS ya estaba instalado." -ForegroundColor Green
     }
     
     Write-Host "`nPresiona Enter para volver..."
@@ -22,24 +22,31 @@ function Instalar-DNS {
 
 function Configurar-IP {
     Clear-Host
-    Write-Host "`n=== CONFIGURAR IP ESTÁTICA ===" -ForegroundColor Cyan
+    Write-Host "`n=== CONFIGURAR IP ESTATICA ===" -ForegroundColor Cyan
     
+    $interfaz = Get-NetAdapter | Where-Object Name -like '*Ethernet 2*' | Select-Object -First 1
+    
+    if (-not $interfaz) {
+        Write-Host "No se encontro Ethernet 2, usando el primer adaptador activo..." -ForegroundColor Yellow
+        $interfaz = Get-NetAdapter | Where-Object Status -eq 'Up' | Select-Object -First 1
+    }
 
-    $interfaz = Get-NetAdapter | Where-Object Status -eq 'Up' | Select-Object -First 1
     $ipActual = Get-NetIPAddress -InterfaceAlias $interfaz.Name -AddressFamily IPv4 -ErrorAction SilentlyContinue
 
-    if ($ipActual.PrefixOrigin -eq 'Dhcp' -or $ipActual -eq $null) {
-        Write-Host "Tu interfaz ($($interfaz.Name)) está en DHCP." -ForegroundColor Yellow
-        $nuevaIP = Read-Host "Ingresa la IP estática que le quieres poner (ej. 192.168.10.10)"
-        $mascara = Read-Host "Ingresa la máscara en prefijo (ej. 24)"
-        
-        New-NetIPAddress -InterfaceAlias $interfaz.Name -IPAddress $nuevaIP -PrefixLength $mascara | Out-Null
-        Set-DnsClientServerAddress -InterfaceAlias $interfaz.Name -ServerAddresses $nuevaIP | Out-Null
-        
-        Write-Host "¡IP Fija asignada correctamente a $nuevaIP!" -ForegroundColor Green
-    } else {
-        Write-Host "Tu servidor ya tiene la IP fija: $($ipActual.IPAddress)" -ForegroundColor Green
-    }
+    Write-Host "Configurando adaptador: $($interfaz.Name)" -ForegroundColor Cyan
+    
+    $nuevaIP = Read-Host "Ingresa la IP estatica (deja en blanco para auto: 192.168.10.20)"
+    $mascara = Read-Host "Ingresa la mascara en prefijo (deja en blanco para auto: 24)"
+    
+    if ([string]::IsNullOrWhiteSpace($nuevaIP)) { $nuevaIP = "192.168.10.20" }
+    if ([string]::IsNullOrWhiteSpace($mascara)) { $mascara = "24" }
+    
+    Remove-NetIPAddress -InterfaceAlias $interfaz.Name -AddressFamily IPv4 -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
+    
+    New-NetIPAddress -InterfaceAlias $interfaz.Name -IPAddress $nuevaIP -PrefixLength $mascara | Out-Null
+    Set-DnsClientServerAddress -InterfaceAlias $interfaz.Name -ServerAddresses $nuevaIP | Out-Null
+    
+    Write-Host "IP Fija asignada correctamente a $nuevaIP" -ForegroundColor Green
 
     Write-Host "`nPresiona Enter para volver..."
     Read-Host
@@ -49,30 +56,24 @@ function Crear-Zona {
     Clear-Host
     Write-Host "`n=== CREAR ZONA Y REGISTRO DNS ===" -ForegroundColor Cyan
     
-    $dominio = Read-Host "Ingresa el nombre del dominio (ej. reprobados.com)"
-    $ipDestino = Read-Host "Ingresa la IP que resolverá este dominio"
-
+    $dominio = Read-Host "Ingresa el nombre del dominio"
+    $ipDestino = Read-Host "Ingresa la IP que resolvera este dominio"
 
     $zonaExiste = Get-DnsServerZone -Name $dominio -ErrorAction SilentlyContinue
     
     if (!$zonaExiste) {
         Write-Host "Creando la zona primaria $dominio..." -ForegroundColor Yellow
         Add-DnsServerPrimaryZone -Name $dominio -ZoneFile "$dominio.dns" | Out-Null
-        Write-Host "¡Zona creada exitosamente!" -ForegroundColor Green
+        Write-Host "Zona creada exitosamente!" -ForegroundColor Green
     } else {
-        Write-Host "La zona ya existe, le agregaremos el registro..." -ForegroundColor Yellow
+        Write-Host "La zona ya existe, agregando registro..." -ForegroundColor Yellow
     }
 
-    
-    Write-Host "Agregando registro..." -ForegroundColor Yellow
-
-    # Solo creamos el registro raíz (@), eliminamos el de www
     Add-DnsServerResourceRecordA -Name "@" -ZoneName $dominio -IPv4Address $ipDestino -AllowUpdateAny -ErrorAction SilentlyContinue | Out-Null
     
-    Write-Host "¡Registro guardado al 100!" -ForegroundColor Green
+    Write-Host "Registro guardado al 100!" -ForegroundColor Green
 
-    Write-Host "`nHaciendo prueba de nslookup rapidita:" -ForegroundColor Cyan
-    # Prueba directa al dominio sin el www
+    Write-Host "`nHaciendo prueba rapida:" -ForegroundColor Cyan
     nslookup $dominio "127.0.0.1"
 
     Write-Host "`nPresiona Enter para volver..."
@@ -83,17 +84,16 @@ function Eliminar-Zona {
     Clear-Host
     Write-Host "`n=== ELIMINAR ZONA DNS ===" -ForegroundColor Cyan
     
-    $dominio = Read-Host "Ingresa el nombre del dominio a eliminar (ej. reprobados.com)"
+    $dominio = Read-Host "Ingresa el nombre del dominio a eliminar"
     
     $zonaExiste = Get-DnsServerZone -Name $dominio -ErrorAction SilentlyContinue
     
     if ($zonaExiste) {
         Write-Host "Borrando el dominio $dominio..." -ForegroundColor Yellow
-        # Force evita que Windows pregunte "Estás seguro?"
         Remove-DnsServerZone -Name $dominio -Force
-        Write-Host "¡Dominio fulminado al 100!" -ForegroundColor Green
+        Write-Host "Dominio fulminado al 100!" -ForegroundColor Green
     } else {
-        Write-Host "Ese dominio no existe, bro. Checa bien el nombre." -ForegroundColor Red
+        Write-Host "Ese dominio no existe." -ForegroundColor Red
     }
     
     Write-Host "`nPresiona Enter para volver..."
@@ -115,14 +115,14 @@ while ($true) {
     Write-Host "    SCRIPT DE DNS BIND - WIN SERVER   " -ForegroundColor Cyan
     
     Write-Host "1) Revisar / Instalar servicio DNS"
-    Write-Host "2) Asignar IP estática al Servidor"
+    Write-Host "2) Asignar IP estatica al Servidor"
     Write-Host "3) Crear nueva Zona (Dominio) y Registros"
     Write-Host "4) Ver dominios configurados"
     Write-Host "5) Eliminar un Dominio (Zona)"
     Write-Host "6) Salir"
     Write-Host "--------------------------------------"
     
-    $opcion = Read-Host "Elige una opción bro"
+    $opcion = Read-Host "Elige una opcion"
 
     switch ($opcion) {
         "1" { Instalar-DNS }
@@ -131,11 +131,11 @@ while ($true) {
         "4" { Mostrar-Zonas }
         "5" { Eliminar-Zona }
         "6" { 
-            Write-Host "¡Sobres, nos vemos!" -ForegroundColor Green
+            Write-Host "Sobres, nos vemos!" -ForegroundColor Green
             exit 
         }
         default { 
-            Write-Host "¡Opción inválida, checa bien los números!" -ForegroundColor Red
+            Write-Host "Opcion invalida, checa bien los numeros!" -ForegroundColor Red
             Start-Sleep -Seconds 2
         }
     }
