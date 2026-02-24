@@ -1,4 +1,3 @@
-
 if (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Write-Warning "¡Ocupas abrir PowerShell como Administrador para correr esto, bro!"
     Exit
@@ -65,17 +64,38 @@ function Crear-Zona {
     }
 
     
-    Write-Host "Agregando registros..." -ForegroundColor Yellow
+    Write-Host "Agregando registro..." -ForegroundColor Yellow
 
+    # Solo creamos el registro raíz (@), eliminamos el de www
     Add-DnsServerResourceRecordA -Name "@" -ZoneName $dominio -IPv4Address $ipDestino -AllowUpdateAny -ErrorAction SilentlyContinue | Out-Null
-
-    Add-DnsServerResourceRecordA -Name "www" -ZoneName $dominio -IPv4Address $ipDestino -AllowUpdateAny -ErrorAction SilentlyContinue | Out-Null
     
-    Write-Host "¡Registros guardados al 100!" -ForegroundColor Green
+    Write-Host "¡Registro guardado al 100!" -ForegroundColor Green
 
     Write-Host "`nHaciendo prueba de nslookup rapidita:" -ForegroundColor Cyan
-    nslookup "www.$dominio" "127.0.0.1"
+    # Prueba directa al dominio sin el www
+    nslookup $dominio "127.0.0.1"
 
+    Write-Host "`nPresiona Enter para volver..."
+    Read-Host
+}
+
+function Eliminar-Zona {
+    Clear-Host
+    Write-Host "`n=== ELIMINAR ZONA DNS ===" -ForegroundColor Cyan
+    
+    $dominio = Read-Host "Ingresa el nombre del dominio a eliminar (ej. reprobados.com)"
+    
+    $zonaExiste = Get-DnsServerZone -Name $dominio -ErrorAction SilentlyContinue
+    
+    if ($zonaExiste) {
+        Write-Host "Borrando el dominio $dominio..." -ForegroundColor Yellow
+        # Force evita que Windows pregunte "Estás seguro?"
+        Remove-DnsServerZone -Name $dominio -Force
+        Write-Host "¡Dominio fulminado al 100!" -ForegroundColor Green
+    } else {
+        Write-Host "Ese dominio no existe, bro. Checa bien el nombre." -ForegroundColor Red
+    }
+    
     Write-Host "`nPresiona Enter para volver..."
     Read-Host
 }
@@ -98,7 +118,8 @@ while ($true) {
     Write-Host "2) Asignar IP estática al Servidor"
     Write-Host "3) Crear nueva Zona (Dominio) y Registros"
     Write-Host "4) Ver dominios configurados"
-    Write-Host "5) Salir"
+    Write-Host "5) Eliminar un Dominio (Zona)"
+    Write-Host "6) Salir"
     Write-Host "--------------------------------------"
     
     $opcion = Read-Host "Elige una opción bro"
@@ -108,7 +129,8 @@ while ($true) {
         "2" { Configurar-IP }
         "3" { Crear-Zona }
         "4" { Mostrar-Zonas }
-        "5" { 
+        "5" { Eliminar-Zona }
+        "6" { 
             Write-Host "¡Sobres, nos vemos!" -ForegroundColor Green
             exit 
         }
