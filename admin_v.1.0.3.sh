@@ -61,10 +61,17 @@ detect_class_info() {
     O2=$(cut -d. -f2 <<< "$IP")
     O3=$(cut -d. -f3 <<< "$IP")
 
-        elif [ "$O1" -ge 192 ] && [ "$O1" -le 254 ]; then
+    if [ "$O1" -ge 1 ] && [ "$O1" -le 126 ]; then
+        echo "A 255.0.0.0 8 $O1.0.0.0"
+    elif [ "$O1" -ge 128 ] && [ "$O1" -le 191 ]; then
+        echo "B 255.255.0.0 16 $O1.$O2.0.0"
+    elif [ "$O1" -ge 192 ] && [ "$O1" -le 254 ]; then
         echo "C 255.255.255.0 24 $O1.$O2.$O3.0"
-
+    else
+        echo "UNKNOWN 0 0 0"
+    fi
 }
+
 
 while true; do
     clear
