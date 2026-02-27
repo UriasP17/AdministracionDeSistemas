@@ -72,7 +72,6 @@ detect_class_info() {
     fi
 }
 
-
 while true; do
     clear
     echo -e "\e[36m------------------------------------------\e[0m"
@@ -149,7 +148,7 @@ while true; do
 subnet $SUBNET netmask $MASK {
     range $CLIENT_START $FINAL_IP;
     option routers $SERVER_IP;
-    option domain-name-servers $SERVER_IP, 8.8.8.8;
+    option domain-name-servers 8.8.8.8;
     option domain-name \"local\";
     default-lease-time 600;
     max-lease-time 7200;
@@ -162,7 +161,7 @@ EOF"
             if systemctl is-active --quiet dhcpd; then
                 echo -e "\n\e[32mTodo listo en $INTERFACE.\e[0m"
             else
-                echo -e "\n\e[31mTrono algo. Checa journalctl.\e[0m"
+                echo -e "\n\e[31mTrono algo. Checa journalctl -xeu dhcpd\e[0m"
             fi
             read -p "Dale Enter..."
         ;;
