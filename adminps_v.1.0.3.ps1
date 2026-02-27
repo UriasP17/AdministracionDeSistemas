@@ -59,8 +59,8 @@ function Setup-DHCPScope {
     Get-DhcpServerv4Scope | Remove-DhcpServerv4Scope -Force -ErrorAction SilentlyContinue
     
     Add-DhcpServerv4Scope -Name $ScopeName -StartRange $StartRange -EndRange $EndRange -SubnetMask $SubnetMask -State Active
-    Set-DhcpServerv4OptionValue -ScopeId $SubnetID -Router $ServerIP
-    Set-DhcpServerv4OptionValue -ScopeId $SubnetID -DnsServer "8.8.8.8", "8.8.4.4"
+    Set-DhcpServerv4OptionValue -ScopeId $SubnetID -Router $ServerIP -ErrorAction SilentlyContinue
+    Set-DhcpServerv4OptionValue -ScopeId $SubnetID -DnsServer $ServerIP -ErrorAction SilentlyContinue
     
     Set-DhcpServerv4Binding -BindingState $true -InterfaceAlias $INTERFACE -ErrorAction SilentlyContinue
     New-NetFirewallRule -DisplayName "DHCP-IN" -Direction Inbound -LocalPort 67 -Protocol UDP -Action Allow -ErrorAction SilentlyContinue
