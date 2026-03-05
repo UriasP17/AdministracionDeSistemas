@@ -39,7 +39,7 @@ function Preparar-EntornoFTP {
     New-Item -ItemType Directory -Force -Path $publicPath, "$gruposPath\reprobados", "$gruposPath\recursadores", "$usersPath\Public" | Out-Null
 
     $grupos = @("grupo-ftp", "reprobados", "recursadores")
-    foreach ($grp en $grupos) {
+    foreach ($grp in $grupos) {
         if (-not (Get-LocalGroup -Name $grp -ErrorAction SilentlyContinue)) {
             New-LocalGroup -Name $grp -Description "Grupo FTP $grp" | Out-Null
         }
@@ -163,7 +163,7 @@ function Mostrar-ResumenUsuarios {
     if (-not $miembros) {
         Write-Host "No hay usuarios registrados actualmente."
     } else {
-        foreach ($u en $miembros) {
+        foreach ($u in $miembros) {
             $nombre = $u.Name.Split('\')[-1]
             $userGroups = Get-LocalGroup -Member $nombre | Select-Object -ExpandProperty Name
             
