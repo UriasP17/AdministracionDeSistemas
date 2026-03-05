@@ -42,7 +42,8 @@ function Preparar-EntornoFTP {
         # Aislamiento Físico Nativo (Modo 2 es obsoleto/bugeado, usamos Modo 1 que es Root isolation nativo)
         Set-ItemProperty "IIS:\Sites\$ftpSiteName" -Name ftpServer.userIsolation.mode -Value 1
         
-        Add-WebConfiguration -Filter /system.ftpServer/security/authorization -PSPath "IIS:\Sites\$ftpSiteName" -Value @{accessType="Allow"; users="*"; permissions="Read,Write"}
+       & "$env:windir\System32\inetsrv\appcmd.exe" set config "$ftpSiteName" -section:system.ftpServer/security/authorization /+"[accessType='Allow',users='*',permissions='Read, Write']" /commit:apphost | Out-Null
+
     }
 
     Enable-NetFirewallRule -DisplayGroup "FTP Server" -ErrorAction SilentlyContinue | Out-Null
