@@ -74,6 +74,7 @@ function Establecer-PuntosMontaje {
     
     $vdirGeneral = "IIS:\Sites\$ftpSiteName\LocalUser\$usuario\General"
     $vdirGrupo = "IIS:\Sites\$ftpSiteName\LocalUser\$usuario\$grupo"
+    Import-Module WebAdministration -ErrorAction SilentlyContinue
 
     if (-not (Test-Path $vdirGeneral)) {
         New-WebVirtualDirectory -Site $ftpSiteName -Name "LocalUser/$usuario/General" -PhysicalPath $publicPath | Out-Null
@@ -97,7 +98,7 @@ function Dar-AltaUsuario {
     }
 
     $securePass = ConvertTo-SecureString $pass -AsPlainText -Force
-    New-LocalUser -Name $user -Password $securePass -PasswordNeverExpires $true | Out-Null
+    New-LocalUser -Name $user -Password $securePass -PasswordNeverExpires | Out-Null
 
     Add-LocalGroupMember -Group "grupo-ftp" -Member $user
     Add-LocalGroupMember -Group $group -Member $user
