@@ -1,7 +1,3 @@
-# ==========================================
-# GESTOR FTP AUTOMATIZADO PARA WINDOWS SERVER
-# ==========================================
-
 Import-Module ServerManager
 
 $ftpSiteName = "ServidorFTP"
@@ -119,9 +115,16 @@ function Mover-UsuarioGrupo {
         return
     }
 
-    $gruposActuales = Get-LocalGroup -Member $user | Select-Object -ExpandProperty Name
-    if ($gruposActuales -contains "reprobados") { Remove-LocalGroupMember -Group "reprobados" -Member $user }
-    if ($gruposActuales -contains "recursadores") { Remove-LocalGroupMember -Group "recursadores" -Member $user }
+    $gruposActuales = @()
+    foreach ($g in Get-LocalGroup) {
+        $members = Get-LocalGroupMember -Group $g.Name -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
+        if ($members -match ".*\\$user$") {
+            $gruposActuales += $g.Name
+        }
+    }
+
+    if ($gruposActuales -contains "reprobados") { Remove-LocalGroupMember -Group "reprobados" -Member $user -ErrorAction SilentlyContinue }
+    if ($gruposActuales -contains "recursadores") { Remove-LocalGroupMember -Group "recursadores" -Member $user -ErrorAction SilentlyContinue }
 
     Add-LocalGroupMember -Group $n_group -Member $user
 
@@ -166,8 +169,13 @@ function Mostrar-ResumenUsuarios {
     } else {
         foreach ($u in $miembros) {
             $nombre = $u.Name.Split('\')[-1]
-            $userGroups = Get-LocalGroup -Member $nombre | Select-Object -ExpandProperty Name
-            
+            $userGroups = @()
+foreach ($g in Get-LocalGroup) {
+    $members = Get-LocalGroupMember -Group $g.Name -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
+    if ($members -match ".*\\$nombre$") {
+        $userGroups += $g.Name
+    }
+}
             if ($userGroups -contains "reprobados") { $gr = "reprobados" }
             elseif ($userGroups -contains "recursadores") { $gr = "recursadores" }
             else { $gr = "Sin asignar" }
