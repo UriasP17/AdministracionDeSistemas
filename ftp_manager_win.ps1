@@ -1,4 +1,5 @@
 Import-Module ServerManager
+Import-Module WebAdministration -ErrorAction SilentlyContinue
 
 $ftpSiteName = "ServidorFTP"
 $basePath = "C:\SrvFTP"
@@ -6,31 +7,15 @@ $publicPath = "$basePath\Publico"
 $gruposPath = "$basePath\Grupos"
 $usersPath = "$basePath\LocalUser"
 
-function Escribir-Titulo {
-    param([string]$texto)
-    Write-Host "`n=== $texto ===" -ForegroundColor Yellow
-}
-
-function Escribir-Exito {
-    param([string]$texto)
-    Write-Host "[v] $texto" -ForegroundColor Green
-}
-
-function Escribir-ErrorMsg {
-    param([string]$texto)
-    Write-Host "[!] Error: $texto" -ForegroundColor Red
-}
-
-function Escribir-Info {
-    param([string]$texto)
-    Write-Host "[*] $texto" -ForegroundColor Cyan
-}
+function Escribir-Titulo { param([string]$texto); Write-Host "`n=== $texto ===" -ForegroundColor Yellow }
+function Escribir-Exito { param([string]$texto); Write-Host "[v] $texto" -ForegroundColor Green }
+function Escribir-ErrorMsg { param([string]$texto); Write-Host "[!] Error: $texto" -ForegroundColor Red }
+function Escribir-Info { param([string]$texto); Write-Host "[*] $texto" -ForegroundColor Cyan }
 
 function Preparar-EntornoFTP {
     Escribir-Info "Configurando servidor FTP en IIS..."
     
     Install-WindowsFeature Web-FTP-Server, Web-FTP-Service, Web-FTP-Ext -IncludeManagementTools | Out-Null
-    Import-Module WebAdministration
 
     New-Item -ItemType Directory -Force -Path $publicPath, "$gruposPath\reprobados", "$gruposPath\recursadores", "$usersPath", "$usersPath\Public" | Out-Null
 
@@ -49,14 +34,14 @@ function Preparar-EntornoFTP {
 
     if (-not (Test-Path "IIS:\Sites\$ftpSiteName")) {
         New-WebFtpSite -Name $ftpSiteName -Port 21 -PhysicalPath $basePath -Force | Out-Null
-        
         Set-ItemProperty "IIS:\Sites\$ftpSiteName" -Name ftpServer.security.authentication.basicAuthentication.enabled -Value $true
         Set-ItemProperty "IIS:\Sites\$ftpSiteName" -Name ftpServer.security.authentication.anonymousAuthentication.enabled -Value $true
         Set-ItemProperty "IIS:\Sites\$ftpSiteName" -Name ftpServer.security.ssl.controlChannelPolicy -Value 0
         Set-ItemProperty "IIS:\Sites\$ftpSiteName" -Name ftpServer.security.ssl.dataChannelPolicy -Value 0
-        Set-ItemProperty "IIS:\Sites\$ftpSiteName" -Name ftpServer.userIsolation.mode -Value 2
         
-        New-WebVirtualDirectory -Site $ftpSiteName -Name "LocalUser" -PhysicalPath $usersPath | Out-Null
+        # Aislamiento Físico Nativo (Modo 2 es obsoleto/bugeado, usamos Modo 1 que es Root isolation nativo)
+        Set-ItemProperty "IIS:\Sites\$ftpSiteName" -Name ftpServer.userIsolation.mode -Value 1
+        
         Add-WebConfiguration -Filter /system.ftpServer/security/authorization -PSPath "IIS:\Sites\$ftpSiteName" -Value @{accessType="Allow"; users="*"; permissions="Read,Write"}
     }
 
@@ -65,13 +50,11 @@ function Preparar-EntornoFTP {
     Escribir-Exito "Servidor FTP IIS configurado correctamente."
 }
 
-
 function Establecer-PuntosMontaje {
     param([string]$usuario, [string]$grupo)
     
     $vdirGeneral = "IIS:\Sites\$ftpSiteName\LocalUser\$usuario\General"
     $vdirGrupo = "IIS:\Sites\$ftpSiteName\LocalUser\$usuario\$grupo"
-    Import-Module WebAdministration -ErrorAction SilentlyContinue
 
     if (-not (Test-Path $vdirGeneral)) {
         New-WebVirtualDirectory -Site $ftpSiteName -Name "LocalUser/$usuario/General" -PhysicalPath $publicPath | Out-Null
@@ -104,18 +87,13 @@ function Dar-AltaUsuario {
     New-Item -ItemType Directory -Force -Path $userHome | Out-Null
     icacls $userHome /grant "$($user):(OI)(CI)(M)" /T /C /Q | Out-Null
     
-    Import-Module WebAdministration -ErrorAction SilentlyContinue
-    
-    $vdirUsuarioBase = "IIS:\Sites\$ftpSiteName\LocalUser\$user"
-    if (-not (Test-Path $vdirUsuarioBase)) {
-        New-WebVirtualDirectory -Site $ftpSiteName -Name "LocalUser/$user" -PhysicalPath $userHome | Out-Null
-    }
+    # Montaje virtual explícito OBLIGATORIO para Modo 1
+    New-WebVirtualDirectory -Site $ftpSiteName -Name $user -PhysicalPath $userHome | Out-Null
+    New-WebVirtualDirectory -Site $ftpSiteName -Name "LocalUser/$user" -PhysicalPath $userHome | Out-Null
 
     Establecer-PuntosMontaje -usuario $user -grupo $group
-    
     Escribir-Exito "Usuario '$user' creado y configurado en el grupo '$group'."
 }
-
 
 function Mover-UsuarioGrupo {
     param([string]$user, [string]$n_group)
@@ -157,6 +135,7 @@ function Eliminar-Usuario {
     Remove-WebVirtualDirectory -Site $ftpSiteName -Name "LocalUser/$user/reprobados" -ErrorAction SilentlyContinue
     Remove-WebVirtualDirectory -Site $ftpSiteName -Name "LocalUser/$user/recursadores" -ErrorAction SilentlyContinue
     Remove-WebVirtualDirectory -Site $ftpSiteName -Name "LocalUser/$user" -ErrorAction SilentlyContinue
+    Remove-WebVirtualDirectory -Site $ftpSiteName -Name $user -ErrorAction SilentlyContinue
 
     Remove-LocalUser -Name $user
     $userHome = "$usersPath\$user"
@@ -242,7 +221,6 @@ function Menu-Principal {
                         while ($u_pass -eq "") {
                             $u_pass = Read-Host "  Contrasena" -AsSecureString
                             $u_pass = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($u_pass))
-                            if ($u_pass -eq "") { Escribir-ErrorMsg "  La contrasena no puede estar vacia." }
                         }
 
                         $u_group = Read-Host "  Grupo (1: reprobados | 2: recursadores)"
@@ -250,8 +228,6 @@ function Menu-Principal {
                         
                         Dar-AltaUsuario -user $u_name -pass $u_pass -group $grp
                     }
-                } else {
-                    Escribir-ErrorMsg "Cantidad invalida."
                 }
             }
             "2" { Mostrar-ResumenUsuarios }
@@ -266,22 +242,12 @@ function Menu-Principal {
                 Escribir-Titulo "ELIMINAR USUARIO"
                 $u_name = Read-Host "Nombre del usuario que deseas borrar"
                 $confirmar = Read-Host "Estas seguro de eliminar a '$u_name'? (s/n)"
-                if ($confirmar -eq "s" -or $confirmar -eq "S") {
-                    Eliminar-Usuario -user $u_name
-                } else {
-                    Write-Host "Operacion cancelada."
-                }
+                if ($confirmar -eq "s" -or $confirmar -eq "S") { Eliminar-Usuario -user $u_name }
             }
             "5" { Diagnostico-Sistema }
             "6" { Preparar-EntornoFTP }
-            "0" { 
-                Escribir-Info "Saliendo..."
-                exit 
-            }
-            default { Escribir-ErrorMsg "Opcion no valida. Intenta de nuevo." }
+            "0" { exit }
         }
-        Write-Host ""
-        cmd /c pause
     }
 }
 
