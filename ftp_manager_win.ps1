@@ -1,5 +1,4 @@
 Import-Module ServerManager
-Import-Module WebAdministration -ErrorAction SilentlyContinue
 
 $ftpSiteName = "ServidorFTP"
 $basePath = "C:\SrvFTP"
@@ -15,10 +14,12 @@ function Escribir-Info { param([string]$texto); Write-Host "[*] $texto" -Foregro
 function Preparar-EntornoFTP {
     Escribir-Info "Configurando servidor FTP en IIS..."
     
-    Install-WindowsFeature Web-FTP-Server, Web-FTP-Service, Web-FTP-Ext -IncludeManagementTools | Out-Null
+    if (-not (Get-WindowsFeature Web-Ftp-Server).Installed) {
+        Install-WindowsFeature Web-Ftp-Server, Web-Mgmt-Console -IncludeManagementTools | Out-Null
+    }
 
     New-Item -ItemType Directory -Force -Path $publicPath, "$gruposPath\reprobados", "$gruposPath\recursadores", "$usersPath", "$usersPath\Public" | Out-Null
-
+    
     $grupos = @("grupo-ftp", "reprobados", "recursadores")
     foreach ($grp in $grupos) {
         if (-not (Get-LocalGroup -Name $grp -ErrorAction SilentlyContinue)) {
@@ -26,96 +27,74 @@ function Preparar-EntornoFTP {
         }
     }
 
-    icacls $basePath /grant "grupo-ftp:(RX)" /C /Q | Out-Null
-    icacls $usersPath /grant "grupo-ftp:(RX)" /C /Q | Out-Null
-    icacls $publicPath /grant "grupo-ftp:(RX)" /T /C /Q | Out-Null
-    icacls "$gruposPath\reprobados" /grant "reprobados:(M)" /T /C /Q | Out-Null
-    icacls "$gruposPath\recursadores" /grant "recursadores:(M)" /T /C /Q | Out-Null
+    Import-Module WebAdministration -ErrorAction SilentlyContinue
 
     if (-not (Test-Path "IIS:\Sites\$ftpSiteName")) {
         New-WebFtpSite -Name $ftpSiteName -Port 21 -PhysicalPath $basePath -Force | Out-Null
-        Set-ItemProperty "IIS:\Sites\$ftpSiteName" -Name ftpServer.security.authentication.basicAuthentication.enabled -Value $true
-        Set-ItemProperty "IIS:\Sites\$ftpSiteName" -Name ftpServer.security.authentication.anonymousAuthentication.enabled -Value $true
-        Set-ItemProperty "IIS:\Sites\$ftpSiteName" -Name ftpServer.security.ssl.controlChannelPolicy -Value 0
-        Set-ItemProperty "IIS:\Sites\$ftpSiteName" -Name ftpServer.security.ssl.dataChannelPolicy -Value 0
-        
-        # Aislamiento Físico Nativo (Modo 2 es obsoleto/bugeado, usamos Modo 1 que es Root isolation nativo)
-        Set-ItemProperty "IIS:\Sites\$ftpSiteName" -Name ftpServer.userIsolation.mode -Value 1
-        
-       & "$env:windir\System32\inetsrv\appcmd.exe" set config "$ftpSiteName" -section:system.ftpServer/security/authorization /+"[accessType='Allow',users='*',permissions='Read, Write']" /commit:apphost | Out-Null
-
+        Set-ItemProperty "IIS:\Sites\$ftpSiteName" -Name ftpServer.userIsolation.mode -Value "IsolateDirectory"
     }
 
+    Set-ItemProperty "IIS:\Sites\$ftpSiteName" -Name ftpServer.security.ssl.controlChannelPolicy -Value "SslAllow"
+    Set-ItemProperty "IIS:\Sites\$ftpSiteName" -Name ftpServer.security.ssl.dataChannelPolicy -Value "SslAllow"
+
+    Set-WebConfigurationProperty -Filter "/system.ftpServer/security/authentication/anonymousAuthentication" -PSPath "IIS:\Sites\$ftpSiteName" -Name "enabled" -Value $true -ErrorAction SilentlyContinue
+    Set-WebConfigurationProperty -Filter "/system.ftpServer/security/authentication/basicAuthentication" -PSPath "IIS:\Sites\$ftpSiteName" -Name "enabled" -Value $true -ErrorAction SilentlyContinue
+
+    try {
+        Add-WebConfigurationProperty -Filter "/system.ftpServer/security/authorization" -PSPath "IIS:\Sites\$ftpSiteName" -Name "." -Value @{accessType="Allow";users="*";permissions="Read,Write"} -ErrorAction SilentlyContinue
+    } catch { }
+
     Enable-NetFirewallRule -DisplayGroup "FTP Server" -ErrorAction SilentlyContinue | Out-Null
-    Restart-Service ftpsvc -ErrorAction SilentlyContinue
+    Start-Service ftpsvc -ErrorAction SilentlyContinue
     Escribir-Exito "Servidor FTP IIS configurado correctamente."
 }
 
 function Establecer-PuntosMontaje {
     param([string]$usuario, [string]$grupo)
+    Import-Module WebAdministration -ErrorAction SilentlyContinue
     
-    $vdirGeneral = "IIS:\Sites\$ftpSiteName\LocalUser\$usuario\General"
-    $vdirGrupo = "IIS:\Sites\$ftpSiteName\LocalUser\$usuario\$grupo"
-
-    if (-not (Test-Path $vdirGeneral)) {
-        New-WebVirtualDirectory -Site $ftpSiteName -Name "LocalUser/$usuario/General" -PhysicalPath $publicPath | Out-Null
-    }
-    if (-not (Test-Path $vdirGrupo)) {
-        New-WebVirtualDirectory -Site $ftpSiteName -Name "LocalUser/$usuario/$grupo" -PhysicalPath "$gruposPath\$grupo" | Out-Null
-    }
+    New-WebVirtualDirectory -Site $ftpSiteName -Name "LocalUser/$usuario/General" -PhysicalPath $publicPath -Force | Out-Null
+    New-WebVirtualDirectory -Site $ftpSiteName -Name "LocalUser/$usuario/$grupo" -PhysicalPath "$gruposPath\$grupo" -Force | Out-Null
 }
 
 function Dar-AltaUsuario {
     param([string]$user, [string]$pass, [string]$group)
 
-    if (-not $user -or -not $pass) {
-        Escribir-ErrorMsg "Usuario y contrasena son obligatorios."
-        return
-    }
-
-    if (Get-LocalUser -Name $user -ErrorAction SilentlyContinue) {
-        Escribir-ErrorMsg "El usuario '$user' ya existe en el sistema."
-        return
-    }
+    if (-not $user -or -not $pass) { return Escribir-ErrorMsg "Usuario y contrasena obligatorios." }
+    if (Get-LocalUser -Name $user -ErrorAction SilentlyContinue) { return Escribir-ErrorMsg "El usuario '$user' ya existe." }
 
     $securePass = ConvertTo-SecureString $pass -AsPlainText -Force
-    New-LocalUser -Name $user -Password $securePass -PasswordNeverExpires | Out-Null
+    try {
+        New-LocalUser -Name $user -Password $securePass -PasswordNeverExpires -ErrorAction Stop | Out-Null
+    } catch {
+        return Escribir-ErrorMsg "La contrasena no cumple la politica (usa mayusculas, numeros, y simbolos)."
+    }
 
-    Add-LocalGroupMember -Group "grupo-ftp" -Member $user
-    Add-LocalGroupMember -Group $group -Member $user
+    Add-LocalGroupMember -Group "grupo-ftp" -Member $user -ErrorAction SilentlyContinue
+    Add-LocalGroupMember -Group $group -Member $user -ErrorAction SilentlyContinue
 
     $userHome = "$usersPath\$user"
-    New-Item -ItemType Directory -Force -Path $userHome | Out-Null
-    icacls $userHome /grant "$($user):(OI)(CI)(M)" /T /C /Q | Out-Null
-    
-    # Montaje virtual explícito OBLIGATORIO para Modo 1
-    New-WebVirtualDirectory -Site $ftpSiteName -Name $user -PhysicalPath $userHome | Out-Null
-    New-WebVirtualDirectory -Site $ftpSiteName -Name "LocalUser/$user" -PhysicalPath $userHome | Out-Null
+    if (-not (Test-Path $userHome)) { New-Item -ItemType Directory -Force -Path $userHome | Out-Null }
+    icacls $userHome /grant "${user}:(OI)(CI)(F)" /inheritance:r /Q | Out-Null
 
     Establecer-PuntosMontaje -usuario $user -grupo $group
-    Escribir-Exito "Usuario '$user' creado y configurado en el grupo '$group'."
+    Escribir-Exito "Usuario '$user' creado en el grupo '$group'."
 }
 
 function Mover-UsuarioGrupo {
     param([string]$user, [string]$n_group)
 
-    if (-not (Get-LocalUser -Name $user -ErrorAction SilentlyContinue)) {
-        Escribir-ErrorMsg "El usuario '$user' no existe."
-        return
-    }
+    if (-not (Get-LocalUser -Name $user -ErrorAction SilentlyContinue)) { return Escribir-ErrorMsg "Usuario no existe." }
 
     $gruposActuales = @()
     foreach ($g in Get-LocalGroup) {
         $members = Get-LocalGroupMember -Group $g.Name -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
-        if ($members -match ".*\\$user$") {
-            $gruposActuales += $g.Name
-        }
+        if ($members -match ".*\\$user$") { $gruposActuales += $g.Name }
     }
 
     if ($gruposActuales -contains "reprobados") { Remove-LocalGroupMember -Group "reprobados" -Member $user -ErrorAction SilentlyContinue }
     if ($gruposActuales -contains "recursadores") { Remove-LocalGroupMember -Group "recursadores" -Member $user -ErrorAction SilentlyContinue }
-
-    Add-LocalGroupMember -Group $n_group -Member $user
+    Add-LocalGroupMember -Group $n_group -Member $user -ErrorAction SilentlyContinue
 
     Remove-WebVirtualDirectory -Site $ftpSiteName -Name "LocalUser/$user/reprobados" -ErrorAction SilentlyContinue
     Remove-WebVirtualDirectory -Site $ftpSiteName -Name "LocalUser/$user/recursadores" -ErrorAction SilentlyContinue
@@ -126,52 +105,37 @@ function Mover-UsuarioGrupo {
 
 function Eliminar-Usuario {
     param([string]$user)
+    
+    if (-not (Get-LocalUser -Name $user -ErrorAction SilentlyContinue)) { return Escribir-ErrorMsg "Usuario no existe." }
 
-    if (-not (Get-LocalUser -Name $user -ErrorAction SilentlyContinue)) {
-        Escribir-ErrorMsg "El usuario '$user' no existe."
-        return
-    }
-
-    Remove-WebVirtualDirectory -Site $ftpSiteName -Name "LocalUser/$user/General" -ErrorAction SilentlyContinue
-    Remove-WebVirtualDirectory -Site $ftpSiteName -Name "LocalUser/$user/reprobados" -ErrorAction SilentlyContinue
-    Remove-WebVirtualDirectory -Site $ftpSiteName -Name "LocalUser/$user/recursadores" -ErrorAction SilentlyContinue
+    Import-Module WebAdministration -ErrorAction SilentlyContinue
     Remove-WebVirtualDirectory -Site $ftpSiteName -Name "LocalUser/$user" -ErrorAction SilentlyContinue
-    Remove-WebVirtualDirectory -Site $ftpSiteName -Name $user -ErrorAction SilentlyContinue
+    Remove-LocalUser -Name $user -ErrorAction SilentlyContinue
 
-    Remove-LocalUser -Name $user
     $userHome = "$usersPath\$user"
-    if (Test-Path $userHome) { Remove-Item -Path $userHome -Recurse -Force }
+    if (Test-Path $userHome) { Remove-Item -Path $userHome -Recurse -Force -ErrorAction SilentlyContinue }
 
-    Escribir-Exito "Usuario '$user' eliminado por completo del servidor."
+    Escribir-Exito "Usuario '$user' eliminado."
 }
 
 function Mostrar-ResumenUsuarios {
     Escribir-Titulo "LISTADO DE USUARIOS FTP"
-    
-    $lineaCabecera = "{0,-20} | {1,-15}" -f "NOMBRE DE USUARIO", "GRUPO ASIGNADO"
-    Write-Host $lineaCabecera -ForegroundColor Cyan
+    Write-Host ("{0,-20} | {1,-15}" -f "NOMBRE DE USUARIO", "GRUPO ASIGNADO") -ForegroundColor Cyan
     Write-Host "----------------------------------------"
     
     $miembros = Get-LocalGroupMember -Group "grupo-ftp" -ErrorAction SilentlyContinue
-    
-    if (-not $miembros) {
-        Write-Host "No hay usuarios registrados actualmente."
-    } else {
+    if (-not $miembros) { Write-Host "No hay usuarios." } else {
         foreach ($u in $miembros) {
             $nombre = $u.Name.Split('\')[-1]
             $userGroups = @()
             foreach ($g in Get-LocalGroup) {
-                $members = Get-LocalGroupMember -Group $g.Name -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
-                if ($members -match ".*\\$nombre$") {
-                    $userGroups += $g.Name
-                }
+                $m = Get-LocalGroupMember -Group $g.Name -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
+                if ($m -match ".*\\$nombre$") { $userGroups += $g.Name }
             }
             if ($userGroups -contains "reprobados") { $gr = "reprobados" }
             elseif ($userGroups -contains "recursadores") { $gr = "recursadores" }
             else { $gr = "Sin asignar" }
-            
-            $lineaUsuario = "{0,-20} | {1,-15}" -f $nombre, $gr
-            Write-Host $lineaUsuario
+            Write-Host ("{0,-20} | {1,-15}" -f $nombre, $gr)
         }
     }
     Write-Host "----------------------------------------"
@@ -179,22 +143,16 @@ function Mostrar-ResumenUsuarios {
 
 function Diagnostico-Sistema {
     Escribir-Titulo "ESTADO DEL SERVIDOR FTP"
-    
     $servicio = Get-Service ftpsvc -ErrorAction SilentlyContinue
-    if ($servicio.Status -eq "Running") {
-        Write-Host "Servicio IIS FTP: " -NoNewline; Write-Host "ACTIVO Y CORRIENDO" -ForegroundColor Green
-    } else {
-        Write-Host "Servicio IIS FTP: " -NoNewline; Write-Host "INACTIVO / DETENIDO" -ForegroundColor Red
-    }
-
+    if ($servicio.Status -eq "Running") { Write-Host "Servicio IIS FTP: ACTIVO" -ForegroundColor Green } 
+    else { Write-Host "Servicio IIS FTP: INACTIVO" -ForegroundColor Red }
+    
     $ip_addr = (Get-NetIPAddress -AddressFamily IPv4 -InterfaceAlias Ethernet* -ErrorAction SilentlyContinue).IPAddress
-    Write-Host "Direccion IP: " -NoNewline; Write-Host $ip_addr -ForegroundColor Cyan
+    Write-Host "Direccion IP: $ip_addr" -ForegroundColor Cyan
 }
 
 function Menu-Principal {
-    if (-not (Get-Service ftpsvc -ErrorAction SilentlyContinue)) {
-        Preparar-EntornoFTP
-    }
+    if (-not (Get-Service ftpsvc -ErrorAction SilentlyContinue)) { Preparar-EntornoFTP }
 
     while ($true) {
         Escribir-Titulo "PANEL DE ADMINISTRACION FTP (WINDOWS)"
@@ -210,40 +168,29 @@ function Menu-Principal {
 
         switch ($opt) {
             "1" {
-                Escribir-Titulo "CREACION DE USUARIOS"
                 $totalStr = Read-Host "Cuantos usuarios deseas registrar?"
                 if ([int]::TryParse($totalStr, [ref]$null) -and [int]$totalStr -gt 0) {
-                    $total = [int]$totalStr
-                    for ($i = 1; $i -le $total; $i++) {
-                        Write-Host "`nUsuario [$i/$total]:"
-                        $u_name = Read-Host "  Nombre de usuario"
-                        
-                        $u_pass = ""
-                        while ($u_pass -eq "") {
-                            $u_pass = Read-Host "  Contrasena" -AsSecureString
-                            $u_pass = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($u_pass))
-                        }
-
-                        $u_group = Read-Host "  Grupo (1: reprobados | 2: recursadores)"
-                        if ($u_group -eq "1") { $grp = "reprobados" } else { $grp = "recursadores" }
-                        
+                    for ($i = 1; $i -le [int]$totalStr; $i++) {
+                        $u_name = Read-Host "Nombre de usuario"
+                        $u_pass = Read-Host "Contrasena" -AsSecureString
+                        $u_pass = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($u_pass))
+                        $u_group = Read-Host "Grupo (1: reprobados | 2: recursadores)"
+                        $grp = if ($u_group -eq "1") { "reprobados" } else { "recursadores" }
                         Dar-AltaUsuario -user $u_name -pass $u_pass -group $grp
                     }
                 }
             }
             "2" { Mostrar-ResumenUsuarios }
             "3" {
-                Escribir-Titulo "MODIFICAR GRUPO"
-                $u_name = Read-Host "Nombre del usuario a modificar"
+                $u_name = Read-Host "Usuario a modificar"
                 $u_group = Read-Host "Nuevo Grupo (1: reprobados | 2: recursadores)"
-                if ($u_group -eq "1") { $grp = "reprobados" } else { $grp = "recursadores" }
+                $grp = if ($u_group -eq "1") { "reprobados" } else { "recursadores" }
                 Mover-UsuarioGrupo -user $u_name -n_group $grp
             }
             "4" {
-                Escribir-Titulo "ELIMINAR USUARIO"
-                $u_name = Read-Host "Nombre del usuario que deseas borrar"
-                $confirmar = Read-Host "Estas seguro de eliminar a '$u_name'? (s/n)"
-                if ($confirmar -eq "s" -or $confirmar -eq "S") { Eliminar-Usuario -user $u_name }
+                $u_name = Read-Host "Usuario a borrar"
+                $confirmar = Read-Host "Estas seguro? (s/n)"
+                if ($confirmar -eq "s") { Eliminar-Usuario -user $u_name }
             }
             "5" { Diagnostico-Sistema }
             "6" { Preparar-EntornoFTP }
