@@ -41,6 +41,8 @@ function Preparar-EntornoFTP {
         }
     }
 
+    icacls $basePath /grant "grupo-ftp:(RX)" /C /Q | Out-Null
+    icacls $usersPath /grant "grupo-ftp:(RX)" /C /Q | Out-Null
     icacls $publicPath /grant "grupo-ftp:(RX)" /T /C /Q | Out-Null
     icacls "$gruposPath\reprobados" /grant "reprobados:(M)" /T /C /Q | Out-Null
     icacls "$gruposPath\recursadores" /grant "recursadores:(M)" /T /C /Q | Out-Null
@@ -62,6 +64,7 @@ function Preparar-EntornoFTP {
     Restart-Service ftpsvc -ErrorAction SilentlyContinue
     Escribir-Exito "Servidor FTP IIS configurado correctamente."
 }
+
 
 function Establecer-PuntosMontaje {
     param([string]$usuario, [string]$grupo)
