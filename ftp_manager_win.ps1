@@ -32,7 +32,7 @@ function Preparar-EntornoFTP {
     Install-WindowsFeature Web-FTP-Server, Web-FTP-Service, Web-FTP-Ext -IncludeManagementTools | Out-Null
     Import-Module WebAdministration
 
-    New-Item -ItemType Directory -Force -Path $publicPath, "$gruposPath\reprobados", "$gruposPath\recursadores", "$usersPath\Public" | Out-Null
+    New-Item -ItemType Directory -Force -Path $publicPath, "$gruposPath\reprobados", "$gruposPath\recursadores", "$usersPath", "$usersPath\Public" | Out-Null
 
     $grupos = @("grupo-ftp", "reprobados", "recursadores")
     foreach ($grp in $grupos) {
@@ -50,17 +50,15 @@ function Preparar-EntornoFTP {
         
         Set-ItemProperty "IIS:\Sites\$ftpSiteName" -Name ftpServer.security.authentication.basicAuthentication.enabled -Value $true
         Set-ItemProperty "IIS:\Sites\$ftpSiteName" -Name ftpServer.security.authentication.anonymousAuthentication.enabled -Value $true
-        
         Set-ItemProperty "IIS:\Sites\$ftpSiteName" -Name ftpServer.security.ssl.controlChannelPolicy -Value 0
         Set-ItemProperty "IIS:\Sites\$ftpSiteName" -Name ftpServer.security.ssl.dataChannelPolicy -Value 0
-
         Set-ItemProperty "IIS:\Sites\$ftpSiteName" -Name ftpServer.userIsolation.mode -Value 2
-
+        
+        New-WebVirtualDirectory -Site $ftpSiteName -Name "LocalUser" -PhysicalPath $usersPath | Out-Null
         Add-WebConfiguration -Filter /system.ftpServer/security/authorization -PSPath "IIS:\Sites\$ftpSiteName" -Value @{accessType="Allow"; users="*"; permissions="Read,Write"}
     }
 
     Enable-NetFirewallRule -DisplayGroup "FTP Server" -ErrorAction SilentlyContinue | Out-Null
-    
     Restart-Service ftpsvc -ErrorAction SilentlyContinue
     Escribir-Exito "Servidor FTP IIS configurado correctamente."
 }
@@ -102,6 +100,9 @@ function Dar-AltaUsuario {
     $userHome = "$usersPath\$user"
     New-Item -ItemType Directory -Force -Path $userHome | Out-Null
     icacls $userHome /grant "$($user):(M)" /T /C /Q | Out-Null
+    
+    Import-Module WebAdministration -ErrorAction SilentlyContinue
+    New-WebVirtualDirectory -Site $ftpSiteName -Name "LocalUser/$user" -PhysicalPath $userHome -ErrorAction SilentlyContinue | Out-Null
 
     Establecer-PuntosMontaje -usuario $user -grupo $group
     Escribir-Exito "Usuario '$user' creado y configurado en el grupo '$group'."
@@ -146,6 +147,7 @@ function Eliminar-Usuario {
     Remove-WebVirtualDirectory -Site $ftpSiteName -Name "LocalUser/$user/General" -ErrorAction SilentlyContinue
     Remove-WebVirtualDirectory -Site $ftpSiteName -Name "LocalUser/$user/reprobados" -ErrorAction SilentlyContinue
     Remove-WebVirtualDirectory -Site $ftpSiteName -Name "LocalUser/$user/recursadores" -ErrorAction SilentlyContinue
+    Remove-WebVirtualDirectory -Site $ftpSiteName -Name "LocalUser/$user" -ErrorAction SilentlyContinue
 
     Remove-LocalUser -Name $user
     $userHome = "$usersPath\$user"
@@ -157,7 +159,6 @@ function Eliminar-Usuario {
 function Mostrar-ResumenUsuarios {
     Escribir-Titulo "LISTADO DE USUARIOS FTP"
     
-    # Arreglo de sintaxis para PowerShell clásico
     $lineaCabecera = "{0,-20} | {1,-15}" -f "NOMBRE DE USUARIO", "GRUPO ASIGNADO"
     Write-Host $lineaCabecera -ForegroundColor Cyan
     Write-Host "----------------------------------------"
@@ -170,17 +171,16 @@ function Mostrar-ResumenUsuarios {
         foreach ($u in $miembros) {
             $nombre = $u.Name.Split('\')[-1]
             $userGroups = @()
-foreach ($g in Get-LocalGroup) {
-    $members = Get-LocalGroupMember -Group $g.Name -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
-    if ($members -match ".*\\$nombre$") {
-        $userGroups += $g.Name
-    }
-}
+            foreach ($g in Get-LocalGroup) {
+                $members = Get-LocalGroupMember -Group $g.Name -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
+                if ($members -match ".*\\$nombre$") {
+                    $userGroups += $g.Name
+                }
+            }
             if ($userGroups -contains "reprobados") { $gr = "reprobados" }
             elseif ($userGroups -contains "recursadores") { $gr = "recursadores" }
             else { $gr = "Sin asignar" }
             
-            # Arreglo de sintaxis para la impresión
             $lineaUsuario = "{0,-20} | {1,-15}" -f $nombre, $gr
             Write-Host $lineaUsuario
         }
