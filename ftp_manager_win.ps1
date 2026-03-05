@@ -99,14 +99,20 @@ function Dar-AltaUsuario {
 
     $userHome = "$usersPath\$user"
     New-Item -ItemType Directory -Force -Path $userHome | Out-Null
-    icacls $userHome /grant "$($user):(M)" /T /C /Q | Out-Null
+    icacls $userHome /grant "$($user):(OI)(CI)(M)" /T /C /Q | Out-Null
     
     Import-Module WebAdministration -ErrorAction SilentlyContinue
-    New-WebVirtualDirectory -Site $ftpSiteName -Name "LocalUser/$user" -PhysicalPath $userHome -ErrorAction SilentlyContinue | Out-Null
+    
+    $vdirUsuarioBase = "IIS:\Sites\$ftpSiteName\LocalUser\$user"
+    if (-not (Test-Path $vdirUsuarioBase)) {
+        New-WebVirtualDirectory -Site $ftpSiteName -Name "LocalUser/$user" -PhysicalPath $userHome | Out-Null
+    }
 
     Establecer-PuntosMontaje -usuario $user -grupo $group
+    
     Escribir-Exito "Usuario '$user' creado y configurado en el grupo '$group'."
 }
+
 
 function Mover-UsuarioGrupo {
     param([string]$user, [string]$n_group)
