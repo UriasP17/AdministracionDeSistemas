@@ -11,7 +11,6 @@ preparar_entorno_ftp() {
     echo -e "${C_INFO}[*] Configurando servidor VSFTPD...${C_RESET}"
     sudo dnf install -y vsftpd util-linux acl &>/dev/null
 
-    # Corrección del acceso anónimo
     cat <<EOF | sudo tee /etc/vsftpd/vsftpd.conf > /dev/null
 anonymous_enable=YES
 local_enable=YES
@@ -34,17 +33,16 @@ listen_ipv6=YES
 pam_service_name=vsftpd
 EOF
 
-    # Crear estructura base
     sudo mkdir -p /srv/ftp/{grupos/reprobados,grupos/recursadores,publico,anonymous/general,users}
     
-    # Permisos anónimos corregidos
     sudo chown ftp:ftp /srv/ftp/anonymous
     sudo chmod 555 /srv/ftp/anonymous
 
-    if ! mountpoint -q /srv/ftp/anonymous/general; then
-        sudo mount --bind /srv/ftp/publico /srv/ftp/anonymous/general
-        sudo mount -o remount,ro,bind /srv/ftp/anonymous/general
+    # Sincronización automática de carpeta general para anónimo
+    if ! grep -q "/srv/ftp/publico /srv/ftp/anonymous/general" /etc/fstab; then
+        echo "/srv/ftp/publico /srv/ftp/anonymous/general none bind,ro 0 0" | sudo tee -a /etc/fstab > /dev/null
     fi
+    sudo mount -a
 
     sudo groupadd -f reprobados
     sudo groupadd -f recursadores
@@ -83,6 +81,7 @@ establecer_puntos_montaje() {
     sudo umount "$home_dir/reprobados" 2>/dev/null
     sudo umount "$home_dir/recursadores" 2>/dev/null
 
+    # Sincronización automática de carpetas para el usuario (temporal)
     sudo mount --bind /srv/ftp/publico "$home_dir/general"
     sudo mount --bind /srv/ftp/grupos/"$grupo" "$home_dir/$grupo"
 
@@ -100,7 +99,6 @@ dar_alta_usuario() {
     local pass=$2
     local group=$3
 
-    # Validación de usuario y contraseña
     if [[ -z "$user" || -z "$pass" ]]; then
         echo -e "${C_ERROR}[!] Error: Usuario y contraseña son obligatorios.${C_RESET}"
         return
@@ -115,6 +113,15 @@ dar_alta_usuario() {
     echo "$user:$pass" | sudo chpasswd
 
     establecer_puntos_montaje "$user" "$group"
+    
+    # Hacer que las carpetas del usuario resistan reinicios del servidor
+    if ! grep -q "/srv/ftp/publico /home/$user/general" /etc/fstab; then
+        echo "/srv/ftp/publico /home/$user/general none bind 0 0" | sudo tee -a /etc/fstab > /dev/null
+    fi
+    if ! grep -q "/srv/ftp/grupos/$group /home/$user/$group" /etc/fstab; then
+        echo "/srv/ftp/grupos/$group /home/$user/$group none bind 0 0" | sudo tee -a /etc/fstab > /dev/null
+    fi
+    
     echo -e "${C_EXITO}[✓] Usuario '$user' creado y configurado en el grupo '$group'.${C_RESET}"
 }
 
@@ -133,6 +140,11 @@ mover_usuario_grupo() {
     sudo umount "/home/$user/recursadores" 2>/dev/null
     sudo rm -rf "/home/$user/reprobados" "/home/$user/recursadores"
 
+    # Actualizar fstab para que no monte la carpeta vieja al reiniciar
+    sudo sed -i "/\/home\/$user\/reprobados/d" /etc/fstab
+    sudo sed -i "/\/home\/$user\/recursadores/d" /etc/fstab
+    echo "/srv/ftp/grupos/$n_group /home/$user/$n_group none bind 0 0" | sudo tee -a /etc/fstab > /dev/null
+
     establecer_puntos_montaje "$user" "$n_group"
     echo -e "${C_EXITO}[✓] Usuario '$user' movido al grupo '$n_group'.${C_RESET}"
 }
@@ -145,12 +157,13 @@ eliminar_usuario() {
         return
     fi
 
-    # Desmontar directorios antes de borrar
     sudo umount "/home/$user/general" 2>/dev/null
     sudo umount "/home/$user/reprobados" 2>/dev/null
     sudo umount "/home/$user/recursadores" 2>/dev/null
 
-    # Eliminar usuario y su directorio home (-r)
+    # Limpiar el rastro en fstab
+    sudo sed -i "/\/home\/$user\//d" /etc/fstab
+
     sudo userdel -r "$user" &>/dev/null
     echo -e "${C_EXITO}[✓] Usuario '$user' eliminado por completo del servidor.${C_RESET}"
 }
@@ -206,7 +219,6 @@ diagnostico_sistema() {
 }
 
 menu_principal() {
-    # Auto-configurar si el servicio no existe
     if ! systemctl is-active --quiet vsftpd; then
         preparar_entorno_ftp
     fi
@@ -236,7 +248,6 @@ menu_principal() {
                         echo -e "\nUsuario [$i/$total]:"
                         read -p "  Nombre de usuario: " u_name
                         
-                        # Bucle para forzar que ingrese contraseña
                         while true; do
                             read -s -p "  Contraseña: " u_pass; echo
                             if [ -n "$u_pass" ]; then break; fi
@@ -249,9 +260,7 @@ menu_principal() {
                     done
                 fi
                 ;;
-            2) 
-                mostrar_resumen_usuarios 
-                ;;
+            2) mostrar_resumen_usuarios ;;
             3)
                 echo -e "\n${C_TITULO}--- MODIFICAR GRUPO ---${C_RESET}"
                 read -p "Nombre del usuario a modificar: " u_name
@@ -269,24 +278,14 @@ menu_principal() {
                     echo "Operación cancelada."
                 fi
                 ;;
-            5) 
-                diagnostico_sistema 
-                ;;
-            6) 
-                preparar_entorno_ftp 
-                ;;
-            0) 
-                echo -e "${C_INFO}Saliendo...${C_RESET}"
-                exit 0 
-                ;;
-            *) 
-                echo -e "${C_ERROR}Opción no válida. Intenta de nuevo.${C_RESET}" 
-                ;;
+            5) diagnostico_sistema ;;
+            6) preparar_entorno_ftp ;;
+            0) echo -e "${C_INFO}Saliendo...${C_RESET}"; exit 0 ;;
+            *) echo -e "${C_ERROR}Opción no válida. Intenta de nuevo.${C_RESET}" ;;
         esac
         echo ""
         read -p "Presiona ENTER para volver al menú principal..."
     done
 }
 
-# Ejecutar el menú principal
 menu_principal
