@@ -228,7 +228,6 @@ function Opcion-Eliminar-Usuario {
     Escribir-Titulo "ELIMINAR USUARIOS FTP"
     $USERNAME = Read-Host "Nombre del usuario a eliminar"
     if (-not (Get-LocalUser -Name $USERNAME -ErrorAction SilentlyContinue)) { return Escribir-ErrorMsg "El usuario no existe." }
-    
     $confirm = Read-Host "Estas seguro de eliminar a '$USERNAME'? Todo su FTP se borrara (s/n)"
     if ($confirm -match "^[sS]$") {
         foreach ($grupo in $GRUPOS) { Remove-LocalGroupMember -Group $grupo -Member $USERNAME -ErrorAction SilentlyContinue }
@@ -242,6 +241,37 @@ function Opcion-Eliminar-Usuario {
     Read-Host "Presiona Enter para continuar"
 }
 
+function Opcion-Cambiar-Grupo {
+    Escribir-Titulo "CAMBIAR USUARIO DE GRUPO FTP"
+    $USERNAME = Read-Host "Nombre del usuario"
+    if (-not (Get-LocalUser -Name $USERNAME -ErrorAction SilentlyContinue)) { return Escribir-ErrorMsg "El usuario no existe." }
+    
+    $GRUPO_ACTUAL = ""
+    foreach ($grp in $GRUPOS) {
+        $miembros = Get-LocalGroupMember -Group $grp -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
+        if ($miembros -match ".*\\$USERNAME$") { $GRUPO_ACTUAL = $grp; break }
+    }
+    if ($GRUPO_ACTUAL -eq "") { return Escribir-ErrorMsg "El usuario no pertenece a ningun grupo FTP." }
+    
+    Escribir-Info "Grupo actual: $GRUPO_ACTUAL"
+    $NUEVO_GRUPO_SEL = Read-Host "Nuevo Grupo (1: reprobados | 2: recursadores)"
+    $NUEVO_GRUPO = if ($NUEVO_GRUPO_SEL -eq "1") { "reprobados" } else { "recursadores" }
+    
+    if ($GRUPO_ACTUAL -eq $NUEVO_GRUPO) { return Escribir-ErrorMsg "El usuario ya esta en el grupo $NUEVO_GRUPO." }
+
+    Remove-LocalGroupMember -Group $GRUPO_ACTUAL -Member $USERNAME -ErrorAction SilentlyContinue
+    Add-LocalGroupMember -Group $NUEVO_GRUPO -Member $USERNAME -ErrorAction SilentlyContinue
+
+    $USER_FTP_DIR = "$FTP_ANON\LocalUser\$USERNAME"
+    $oldJunction = "$USER_FTP_DIR\$GRUPO_ACTUAL"
+    if (Test-Path $oldJunction) { cmd /c "rmdir `"$oldJunction`"" | Out-Null }
+    
+    cmd /c "mklink /J `"$USER_FTP_DIR\$NUEVO_GRUPO`" `"$FTP_ROOT\$NUEVO_GRUPO`"" | Out-Null
+    
+    Escribir-Exito "Usuario '$USERNAME' movido de $GRUPO_ACTUAL a $NUEVO_GRUPO."
+    Read-Host "Presiona Enter para continuar"
+}
+
 function Menu-Principal {
     while ($true) {
         Clear-Host
@@ -249,7 +279,8 @@ function Menu-Principal {
         Write-Host " [1] Instalar componentes FTP" -ForegroundColor Cyan
         Write-Host " [2] Configurar sitio base" -ForegroundColor Cyan
         Write-Host " [3] Crear usuarios" -ForegroundColor Cyan
-        Write-Host " [4] Eliminar usuario" -ForegroundColor Cyan
+        Write-Host " [4] Cambiar grupo de usuario" -ForegroundColor Cyan
+        Write-Host " [5] Eliminar usuario" -ForegroundColor Cyan
         Write-Host " [0] Salir" -ForegroundColor Red
         Write-Host "---------------------------------------"
         $opt = Read-Host "Elige una opcion"
@@ -258,7 +289,8 @@ function Menu-Principal {
             "1" { Opcion-Instalar-FTP }
             "2" { Opcion-Configurar-FTP }
             "3" { Opcion-Crear-Usuarios }
-            "4" { Opcion-Eliminar-Usuario }
+            "4" { Opcion-Cambiar-Grupo }
+            "5" { Opcion-Eliminar-Usuario }
             "0" { exit }
         }
     }
