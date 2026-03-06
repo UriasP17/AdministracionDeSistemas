@@ -224,23 +224,6 @@ function Opcion-Crear-Usuarios {
     Read-Host "Presiona Enter para continuar"
 }
 
-function Opcion-Eliminar-Usuario {
-    Escribir-Titulo "ELIMINAR USUARIOS FTP"
-    $USERNAME = Read-Host "Nombre del usuario a eliminar"
-    if (-not (Get-LocalUser -Name $USERNAME -ErrorAction SilentlyContinue)) { return Escribir-ErrorMsg "El usuario no existe." }
-    $confirm = Read-Host "Estas seguro de eliminar a '$USERNAME'? Todo su FTP se borrara (s/n)"
-    if ($confirm -match "^[sS]$") {
-        foreach ($grupo in $GRUPOS) { Remove-LocalGroupMember -Group $grupo -Member $USERNAME -ErrorAction SilentlyContinue }
-        Remove-LocalUser -Name $USERNAME -ErrorAction SilentlyContinue
-        $USER_FTP_DIR = "$FTP_ANON\LocalUser\$USERNAME"
-        $personalDir = "$FTP_ROOT\personal\$USERNAME"
-        if (Test-Path $USER_FTP_DIR) { Remove-Item -Path $USER_FTP_DIR -Recurse -Force -ErrorAction SilentlyContinue }
-        if (Test-Path $personalDir) { Remove-Item -Path $personalDir -Recurse -Force -ErrorAction SilentlyContinue }
-        Escribir-Exito "Usuario '$USERNAME' eliminado por completo."
-    }
-    Read-Host "Presiona Enter para continuar"
-}
-
 function Opcion-Cambiar-Grupo {
     Escribir-Titulo "CAMBIAR USUARIO DE GRUPO FTP"
     $USERNAME = Read-Host "Nombre del usuario"
@@ -272,6 +255,47 @@ function Opcion-Cambiar-Grupo {
     Read-Host "Presiona Enter para continuar"
 }
 
+function Opcion-Eliminar-Usuario {
+    Escribir-Titulo "ELIMINAR USUARIOS FTP"
+    $USERNAME = Read-Host "Nombre del usuario a eliminar"
+    if (-not (Get-LocalUser -Name $USERNAME -ErrorAction SilentlyContinue)) { return Escribir-ErrorMsg "El usuario no existe." }
+    $confirm = Read-Host "Estas seguro de eliminar a '$USERNAME'? Todo su FTP se borrara (s/n)"
+    if ($confirm -match "^[sS]$") {
+        foreach ($grupo in $GRUPOS) { Remove-LocalGroupMember -Group $grupo -Member $USERNAME -ErrorAction SilentlyContinue }
+        Remove-LocalUser -Name $USERNAME -ErrorAction SilentlyContinue
+        $USER_FTP_DIR = "$FTP_ANON\LocalUser\$USERNAME"
+        $personalDir = "$FTP_ROOT\personal\$USERNAME"
+        if (Test-Path $USER_FTP_DIR) { Remove-Item -Path $USER_FTP_DIR -Recurse -Force -ErrorAction SilentlyContinue }
+        if (Test-Path $personalDir) { Remove-Item -Path $personalDir -Recurse -Force -ErrorAction SilentlyContinue }
+        Escribir-Exito "Usuario '$USERNAME' eliminado por completo."
+    }
+    Read-Host "Presiona Enter para continuar"
+}
+
+function Opcion-Ver-Usuarios {
+    Escribir-Titulo "LISTA DE USUARIOS FTP"
+    $usuariosEncontrados = @()
+
+    foreach ($grupo in $GRUPOS) {
+        $miembros = Get-LocalGroupMember -Group $grupo -ErrorAction SilentlyContinue
+        foreach ($miembro in $miembros) {
+            $nombre = $miembro.Name.Split('\')[-1]
+            $usuariosEncontrados += [PSCustomObject]@{
+                Usuario = $nombre
+                Grupo   = $grupo
+            }
+        }
+    }
+
+    if ($usuariosEncontrados.Count -eq 0) {
+        Escribir-Info "No hay usuarios registrados en los grupos FTP."
+    } else {
+        $usuariosEncontrados | Sort-Object Usuario | Format-Table -AutoSize
+    }
+
+    Read-Host "Presiona Enter para continuar"
+}
+
 function Menu-Principal {
     while ($true) {
         Clear-Host
@@ -281,6 +305,7 @@ function Menu-Principal {
         Write-Host " [3] Crear usuarios" -ForegroundColor Cyan
         Write-Host " [4] Cambiar grupo de usuario" -ForegroundColor Cyan
         Write-Host " [5] Eliminar usuario" -ForegroundColor Cyan
+        Write-Host " [6] Ver usuarios registrados" -ForegroundColor Cyan
         Write-Host " [0] Salir" -ForegroundColor Red
         Write-Host "---------------------------------------"
         $opt = Read-Host "Elige una opcion"
@@ -291,6 +316,7 @@ function Menu-Principal {
             "3" { Opcion-Crear-Usuarios }
             "4" { Opcion-Cambiar-Grupo }
             "5" { Opcion-Eliminar-Usuario }
+            "6" { Opcion-Ver-Usuarios }
             "0" { exit }
         }
     }
