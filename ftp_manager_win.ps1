@@ -203,7 +203,7 @@ function Opcion-Crear-Usuarios {
             Escribir-ErrorMsg "Error al crear usuario. Verifica las politicas de contrasena o permisos."
             continue
         }
-        $USER_FTP_DIR = "$FTP_ANON\$env:COMPUTERNAME\$USERNAME"
+        $USER_FTP_DIR = "$FTP_ANON\LocalUser\$USERNAME"
         $personalDir = "$FTP_ROOT\personal\$USERNAME"
         New-Item -ItemType Directory -Path $USER_FTP_DIR, $personalDir -Force | Out-Null
         Set-FolderACL -Path $personalDir -Rules @(
@@ -233,7 +233,7 @@ function Opcion-Eliminar-Usuario {
     if ($confirm -match "^[sS]$") {
         foreach ($grupo in $GRUPOS) { Remove-LocalGroupMember -Group $grupo -Member $USERNAME -ErrorAction SilentlyContinue }
         Remove-LocalUser -Name $USERNAME -ErrorAction SilentlyContinue
-        $USER_FTP_DIR = "$FTP_ANON\$env:COMPUTERNAME\$USERNAME"
+        $USER_FTP_DIR = "$FTP_ANON\LocalUser\$USERNAME"
         $personalDir = "$FTP_ROOT\personal\$USERNAME"
         if (Test-Path $USER_FTP_DIR) { Remove-Item -Path $USER_FTP_DIR -Recurse -Force -ErrorAction SilentlyContinue }
         if (Test-Path $personalDir) { Remove-Item -Path $personalDir -Recurse -Force -ErrorAction SilentlyContinue }
