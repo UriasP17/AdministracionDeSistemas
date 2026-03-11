@@ -33,26 +33,34 @@ pam_service_name=vsftpd
 EOF
 
     sudo mkdir -p /srv/ftp/{grupos/reprobados,grupos/recursadores,publico,anonymous/general,users}
-    
-    sudo chown ftp:ftp /srv/ftp/anonymous
-    sudo chmod 555 /srv/ftp/anonymous
-
-    if ! grep -q "/srv/ftp/publico /srv/ftp/anonymous/general" /etc/fstab; then
-        echo "/srv/ftp/publico /srv/ftp/anonymous/general none bind,ro 0 0" | sudo tee -a /etc/fstab > /dev/null
-    fi
-    sudo mount -a
 
     sudo groupadd -f reprobados
     sudo groupadd -f recursadores
     sudo groupadd -f grupo-ftp
 
+    sudo chown ftp:ftp /srv/ftp/anonymous
+    sudo chmod 555 /srv/ftp/anonymous
+
+    if ! grep -q "^/srv/ftp/publico /srv/ftp/anonymous/general " /etc/fstab; then
+        echo "/srv/ftp/publico /srv/ftp/anonymous/general none bind,ro 0 0" | sudo tee -a /etc/fstab > /dev/null
+    fi
+
+    sudo mountpoint -q /srv/ftp/anonymous/general || sudo mount /srv/ftp/anonymous/general 2>/dev/null
+    sudo mount -a
+
     sudo chown root:grupo-ftp /srv/ftp/publico
     sudo chmod 775 /srv/ftp/publico
-    
     sudo setfacl -R -m g:grupo-ftp:rwx /srv/ftp/publico
     sudo setfacl -R -d -m g:grupo-ftp:rwx /srv/ftp/publico
     sudo setfacl -R -m u:ftp:rx /srv/ftp/publico
     sudo setfacl -R -d -m u:ftp:rx /srv/ftp/publico
+
+    for grupo in reprobados recursadores; do
+        sudo chown root:"$grupo" /srv/ftp/grupos/"$grupo"
+        sudo chmod 1775 /srv/ftp/grupos/"$grupo"
+        sudo setfacl -R -m g:"$grupo":rwx /srv/ftp/grupos/"$grupo"
+        sudo setfacl -R -d -m g:"$grupo":rwx /srv/ftp/grupos/"$grupo"
+    done
 
     sudo firewall-cmd --permanent --add-service=ftp &>/dev/null
     sudo firewall-cmd --permanent --add-port=40000-40010/tcp &>/dev/null
@@ -60,7 +68,7 @@ EOF
 
     sudo setsebool -P ftpd_full_access on &>/dev/null
     sudo setsebool -P tftp_home_dir on &>/dev/null
-    
+
     if ! grep -q "/sbin/nologin" /etc/shells; then
         echo "/sbin/nologin" | sudo tee -a /etc/shells > /dev/null
     fi
@@ -84,13 +92,17 @@ establecer_puntos_montaje() {
     sudo mount --bind /srv/ftp/publico "$home_dir/general"
     sudo mount --bind /srv/ftp/grupos/"$grupo" "$home_dir/$grupo"
 
-    sudo chown "$usuario":"$grupo" "$home_dir/$usuario"
-    sudo chmod 700 "$home_dir/$usuario"
+    sudo chown root:root "$home_dir"
+    sudo chmod 555 "$home_dir"
 
-    sudo chown root:"$grupo" /srv/ftp/grupos/"$grupo"
-    sudo chmod 775 /srv/ftp/grupos/"$grupo"
-    sudo setfacl -R -m g:"$grupo":rwx /srv/ftp/grupos/"$grupo"
-    sudo setfacl -R -d -m g:"$grupo":rwx /srv/ftp/grupos/"$grupo"
+    sudo chown root:root "$home_dir/general"
+    sudo chmod 555 "$home_dir/general"
+
+    sudo chown root:root "$home_dir/$grupo"
+    sudo chmod 555 "$home_dir/$grupo"
+
+    sudo chown "$usuario:$usuario" "$home_dir/$usuario"
+    sudo chmod 700 "$home_dir/$usuario"
 }
 
 dar_alta_usuario() {
@@ -108,18 +120,19 @@ dar_alta_usuario() {
         return
     fi
 
-    sudo useradd -m -g grupo-ftp -G "$group" -s /sbin/nologin "$user"
+    sudo useradd -m -s /sbin/nologin "$user"
     echo "$user:$pass" | sudo chpasswd
+    sudo usermod -aG grupo-ftp,"$group" "$user"
 
     establecer_puntos_montaje "$user" "$group"
-    
-    if ! grep -q "/srv/ftp/publico /home/$user/general" /etc/fstab; then
+
+    if ! grep -q "^/srv/ftp/publico /home/$user/general " /etc/fstab; then
         echo "/srv/ftp/publico /home/$user/general none bind 0 0" | sudo tee -a /etc/fstab > /dev/null
     fi
-    if ! grep -q "/srv/ftp/grupos/$group /home/$user/$group" /etc/fstab; then
+    if ! grep -q "^/srv/ftp/grupos/$group /home/$user/$group " /etc/fstab; then
         echo "/srv/ftp/grupos/$group /home/$user/$group none bind 0 0" | sudo tee -a /etc/fstab > /dev/null
     fi
-    
+
     echo -e "${C_EXITO}[v] Usuario '$user' creado en el grupo '$group'.${C_RESET}"
 }
 
@@ -133,23 +146,29 @@ mover_usuario_grupo() {
     fi
 
     local grupo_actual=""
-    if id "$user" | grep -q "reprobados"; then grupo_actual="reprobados"; fi
-    if id "$user" | grep -q "recursadores"; then grupo_actual="recursadores"; fi
+    if id -nG "$user" | grep -qw "reprobados"; then grupo_actual="reprobados"; fi
+    if id -nG "$user" | grep -qw "recursadores"; then grupo_actual="recursadores"; fi
 
     if [[ "$grupo_actual" == "$n_group" ]]; then
         echo -e "${C_ERROR}[!] Error: El usuario ya esta en el grupo $n_group.${C_RESET}"
         return
     fi
 
-    sudo usermod -G "$n_group" "$user"
-    
+    if [[ -n "$grupo_actual" ]]; then
+        sudo gpasswd -d "$user" "$grupo_actual" &>/dev/null
+    fi
+    sudo usermod -aG "$n_group" "$user"
+
     sudo umount "/home/$user/reprobados" 2>/dev/null
     sudo umount "/home/$user/recursadores" 2>/dev/null
     sudo rm -rf "/home/$user/reprobados" "/home/$user/recursadores"
 
-    sudo sed -i "/\/home\/$user\/reprobados/d" /etc/fstab
-    sudo sed -i "/\/home\/$user\/recursadores/d" /etc/fstab
-    echo "/srv/ftp/grupos/$n_group /home/$user/$n_group none bind 0 0" | sudo tee -a /etc/fstab > /dev/null
+    sudo sed -i "\|/home/$user/reprobados|d" /etc/fstab
+    sudo sed -i "\|/home/$user/recursadores|d" /etc/fstab
+
+    if ! grep -q "^/srv/ftp/grupos/$n_group /home/$user/$n_group " /etc/fstab; then
+        echo "/srv/ftp/grupos/$n_group /home/$user/$n_group none bind 0 0" | sudo tee -a /etc/fstab > /dev/null
+    fi
 
     establecer_puntos_montaje "$user" "$n_group"
     echo -e "${C_EXITO}[v] Usuario '$user' movido al grupo '$n_group'.${C_RESET}"
@@ -167,9 +186,9 @@ eliminar_usuario() {
     sudo umount "/home/$user/reprobados" 2>/dev/null
     sudo umount "/home/$user/recursadores" 2>/dev/null
 
-    sudo sed -i "/\/home\/$user\//d" /etc/fstab
-
+    sudo sed -i "\|/home/$user/|d" /etc/fstab
     sudo userdel -r "$user" &>/dev/null
+
     echo -e "${C_EXITO}[v] Usuario '$user' eliminado.${C_RESET}"
 }
 
@@ -177,24 +196,18 @@ mostrar_resumen_usuarios() {
     echo -e "\n${C_TITULO}=== LISTADO DE USUARIOS FTP ===${C_RESET}"
     printf "${C_INFO}%-20s | %-15s${C_RESET}\n" "NOMBRE DE USUARIO" "GRUPO ASIGNADO"
     echo "----------------------------------------"
-    
-    GID_FTP=$(grep "^grupo-ftp:" /etc/group | cut -d: -f3)
-    if [ -z "$GID_FTP" ]; then
-        echo -e "${C_ERROR}No se encontro el grupo FTP.${C_RESET}"
-        return
-    fi
-    
-    users_list=$(awk -F: -v gid="$GID_FTP" '$4 == gid {print $1}' /etc/passwd)
-    
+
+    users_list=$(awk -F: '$7=="/sbin/nologin" && $3>=1000 {print $1}' /etc/passwd)
+
     if [ -z "$users_list" ]; then
         echo "No hay usuarios."
     else
         for u in $users_list; do
-            if id "$u" | grep -q "reprobados"; then 
+            if id -nG "$u" | grep -qw "reprobados"; then
                 gr="reprobados"
-            elif id "$u" | grep -q "recursadores"; then 
+            elif id -nG "$u" | grep -qw "recursadores"; then
                 gr="recursadores"
-            else 
+            else
                 gr="Sin asignar"
             fi
             printf "%-20s | %-15s\n" "$u" "$gr"
@@ -228,7 +241,7 @@ menu_principal() {
                 if [[ ! "$total" =~ ^[0-9]+$ ]] || [[ "$total" -le 0 ]]; then
                     echo -e "${C_ERROR}Cantidad invalida.${C_RESET}"
                 else
-                    for (( i=1; i<=$total; i++ )); do
+                    for (( i=1; i<=total; i++ )); do
                         echo ""
                         read -p "Nombre de usuario $i: " u_name
                         while true; do
