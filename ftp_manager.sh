@@ -8,7 +8,7 @@ C_RESET='\033[0m'
 
 preparar_entorno_ftp() {
     echo -e "${C_INFO}[*] Configurando servidor VSFTPD...${C_RESET}"
-    sudo dnf install -y vsftpd util-linux acl &>/dev/null
+    sudo dnf install -y vsftpd util-linux acl e2fsprogs &>/dev/null
 
     cat <<EOF | sudo tee /etc/vsftpd/vsftpd.conf > /dev/null
 anonymous_enable=YES
@@ -41,20 +41,21 @@ EOF
     sudo chown ftp:ftp /srv/ftp/anonymous
     sudo chmod 555 /srv/ftp/anonymous
 
-    sudo chown root:grupo-ftp /srv/ftp/publico
-    sudo chmod 1777 /srv/ftp/publico
+    sudo chown root:root /srv/ftp/publico
+    sudo chmod 777 /srv/ftp/publico
+    sudo chmod +t /srv/ftp/publico 
     sudo setfacl -R -m g:grupo-ftp:rwx /srv/ftp/publico
     sudo setfacl -R -d -m g:grupo-ftp:rwx /srv/ftp/publico
-    sudo setfacl -R -m u:ftp:rx /srv/ftp/publico
-    sudo setfacl -R -d -m u:ftp:rx /srv/ftp/publico
 
     sudo chown root:reprobados /srv/ftp/grupos/reprobados
-    sudo chmod 1775 /srv/ftp/grupos/reprobados
+    sudo chmod 775 /srv/ftp/grupos/reprobados
+    sudo chmod +t /srv/ftp/grupos/reprobados
     sudo setfacl -R -m g:reprobados:rwx /srv/ftp/grupos/reprobados
     sudo setfacl -R -d -m g:reprobados:rwx /srv/ftp/grupos/reprobados
 
     sudo chown root:recursadores /srv/ftp/grupos/recursadores
-    sudo chmod 1775 /srv/ftp/grupos/recursadores
+    sudo chmod 775 /srv/ftp/grupos/recursadores
+    sudo chmod +t /srv/ftp/grupos/recursadores
     sudo setfacl -R -m g:recursadores:rwx /srv/ftp/grupos/recursadores
     sudo setfacl -R -d -m g:recursadores:rwx /srv/ftp/grupos/recursadores
 
@@ -106,6 +107,9 @@ establecer_puntos_montaje() {
 
     sudo chown "$usuario:$usuario" "$home_dir/$usuario"
     sudo chmod 700 "$home_dir/$usuario"
+
+    sudo chattr -R -a /srv/ftp/publico 2>/dev/null
+    sudo chattr -R -a /srv/ftp/grupos/$grupo 2>/dev/null
 }
 
 dar_alta_usuario() {
@@ -194,9 +198,9 @@ eliminar_usuario() {
         fi
     done
 
-    sudo sed -i "\|$home_dir/general|d" /etc/fstab
-    sudo sed -i "\|$home_dir/reprobados|d" /etc/fstab
-    sudo sed -i "\|$home_dir/recursadores|d" /etc/fstab
+    sudo sed -i "\|/home/$user/general|d" /etc/fstab
+    sudo sed -i "\|/home/$user/reprobados|d" /etc/fstab
+    sudo sed -i "\|/home/$user/recursadores|d" /etc/fstab
 
     sudo userdel -r "$user" &>/dev/null
 
@@ -207,8 +211,6 @@ eliminar_usuario() {
 
     echo -e "${C_EXITO}[v] Usuario '$user' eliminado por completo.${C_RESET}"
 }
-
-
 
 mostrar_resumen_usuarios() {
     echo -e "\n${C_TITULO}=== LISTADO DE USUARIOS FTP ===${C_RESET}"
