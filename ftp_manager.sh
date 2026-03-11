@@ -179,21 +179,30 @@ mover_usuario_grupo() {
 
 eliminar_usuario() {
     local user=$1
+    local home_dir="/home/$user"
 
     if ! id "$user" &>/dev/null; then
         echo -e "${C_ERROR}[!] Error: Usuario no existe.${C_RESET}"
         return
     fi
 
-    sudo umount "/home/$user/general" 2>/dev/null
-    sudo umount "/home/$user/reprobados" 2>/dev/null
-    sudo umount "/home/$user/recursadores" 2>/dev/null
+    sudo umount "$home_dir/general" 2>/dev/null
+    sudo umount "$home_dir/reprobados" 2>/dev/null
+    sudo umount "$home_dir/recursadores" 2>/dev/null
 
-    sudo sed -i "\|/home/$user/|d" /etc/fstab
+    sudo sed -i "\|$home_dir/general|d" /etc/fstab
+    sudo sed -i "\|$home_dir/reprobados|d" /etc/fstab
+    sudo sed -i "\|$home_dir/recursadores|d" /etc/fstab
+
     sudo userdel -r "$user" &>/dev/null
 
-    echo -e "${C_EXITO}[v] Usuario '$user' eliminado.${C_RESET}"
+    if [ -d "$home_dir" ]; then
+        sudo rm -rf "$home_dir"
+    fi
+
+    echo -e "${C_EXITO}[v] Usuario '$user' eliminado por completo.${C_RESET}"
 }
+
 
 mostrar_resumen_usuarios() {
     echo -e "\n${C_TITULO}=== LISTADO DE USUARIOS FTP ===${C_RESET}"
