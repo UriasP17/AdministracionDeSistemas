@@ -186,9 +186,13 @@ eliminar_usuario() {
         return
     fi
 
-    sudo umount "$home_dir/general" 2>/dev/null
-    sudo umount "$home_dir/reprobados" 2>/dev/null
-    sudo umount "$home_dir/recursadores" 2>/dev/null
+    sudo pkill -u "$user" 2>/dev/null
+
+    for punto in "$home_dir/general" "$home_dir/reprobados" "$home_dir/recursadores"; do
+        if mountpoint -q "$punto"; then
+            sudo umount "$punto" 2>/dev/null || sudo umount -l "$punto" 2>/dev/null
+        fi
+    done
 
     sudo sed -i "\|$home_dir/general|d" /etc/fstab
     sudo sed -i "\|$home_dir/reprobados|d" /etc/fstab
@@ -197,11 +201,13 @@ eliminar_usuario() {
     sudo userdel -r "$user" &>/dev/null
 
     if [ -d "$home_dir" ]; then
+        sudo chattr -i "$home_dir" 2>/dev/null
         sudo rm -rf "$home_dir"
     fi
 
     echo -e "${C_EXITO}[v] Usuario '$user' eliminado por completo.${C_RESET}"
 }
+
 
 
 mostrar_resumen_usuarios() {
