@@ -14,7 +14,7 @@ preparar_entorno_ftp() {
 anonymous_enable=YES
 local_enable=YES
 write_enable=YES
-local_umask=022
+local_umask=002
 chroot_local_user=YES
 allow_writeable_chroot=YES
 check_shell=NO
@@ -32,7 +32,7 @@ listen_ipv6=YES
 pam_service_name=vsftpd
 EOF
 
-    sudo mkdir -p /srv/ftp/{grupos/reprobados,grupos/recursadores,publico,anonymous/general,users}
+    sudo mkdir -p /srv/ftp/{grupos/reprobados,grupos/recursadores,publico,anonymous/general}
 
     sudo groupadd -f reprobados
     sudo groupadd -f recursadores
@@ -41,26 +41,29 @@ EOF
     sudo chown ftp:ftp /srv/ftp/anonymous
     sudo chmod 555 /srv/ftp/anonymous
 
+    sudo chown root:grupo-ftp /srv/ftp/publico
+    sudo chmod 1777 /srv/ftp/publico
+    sudo setfacl -R -m g:grupo-ftp:rwx /srv/ftp/publico
+    sudo setfacl -R -d -m g:grupo-ftp:rwx /srv/ftp/publico
+    sudo setfacl -R -m u:ftp:rx /srv/ftp/publico
+    sudo setfacl -R -d -m u:ftp:rx /srv/ftp/publico
+
+    sudo chown root:reprobados /srv/ftp/grupos/reprobados
+    sudo chmod 1775 /srv/ftp/grupos/reprobados
+    sudo setfacl -R -m g:reprobados:rwx /srv/ftp/grupos/reprobados
+    sudo setfacl -R -d -m g:reprobados:rwx /srv/ftp/grupos/reprobados
+
+    sudo chown root:recursadores /srv/ftp/grupos/recursadores
+    sudo chmod 1775 /srv/ftp/grupos/recursadores
+    sudo setfacl -R -m g:recursadores:rwx /srv/ftp/grupos/recursadores
+    sudo setfacl -R -d -m g:recursadores:rwx /srv/ftp/grupos/recursadores
+
     if ! grep -q "^/srv/ftp/publico /srv/ftp/anonymous/general " /etc/fstab; then
         echo "/srv/ftp/publico /srv/ftp/anonymous/general none bind,ro 0 0" | sudo tee -a /etc/fstab > /dev/null
     fi
 
     sudo mountpoint -q /srv/ftp/anonymous/general || sudo mount /srv/ftp/anonymous/general 2>/dev/null
     sudo mount -a
-
-    sudo chown root:grupo-ftp /srv/ftp/publico
-    sudo chmod 775 /srv/ftp/publico
-    sudo setfacl -R -m g:grupo-ftp:rwx /srv/ftp/publico
-    sudo setfacl -R -d -m g:grupo-ftp:rwx /srv/ftp/publico
-    sudo setfacl -R -m u:ftp:rx /srv/ftp/publico
-    sudo setfacl -R -d -m u:ftp:rx /srv/ftp/publico
-
-    for grupo in reprobados recursadores; do
-        sudo chown root:"$grupo" /srv/ftp/grupos/"$grupo"
-        sudo chmod 1775 /srv/ftp/grupos/"$grupo"
-        sudo setfacl -R -m g:"$grupo":rwx /srv/ftp/grupos/"$grupo"
-        sudo setfacl -R -d -m g:"$grupo":rwx /srv/ftp/grupos/"$grupo"
-    done
 
     sudo firewall-cmd --permanent --add-service=ftp &>/dev/null
     sudo firewall-cmd --permanent --add-port=40000-40010/tcp &>/dev/null
@@ -90,7 +93,7 @@ establecer_puntos_montaje() {
     sudo umount "$home_dir/recursadores" 2>/dev/null
 
     sudo mount --bind /srv/ftp/publico "$home_dir/general"
-    sudo mount --bind /srv/ftp/grupos/"$grupo" "$home_dir/$grupo"
+    sudo mount --bind /srv/ftp/grupos/$grupo "$home_dir/$grupo"
 
     sudo chown root:root "$home_dir"
     sudo chmod 555 "$home_dir"
