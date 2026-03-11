@@ -292,9 +292,10 @@ function Opcion-Crear-Usuarios {
 
         $USER_FTP_DIR = "$FTP_ANON\LocalUser\$USERNAME"
         $personalDir = "$FTP_ROOT\personal\$USERNAME"
-        
         New-Item -ItemType Directory -Path $USER_FTP_DIR, $personalDir -Force | Out-Null
 
+        # 1. Permiso a su carpeta personal en C:\inetpub\ftproot\personal\b1
+        # Le damos Modify para adentro, pero bloqueamos borrar el propio "b1"
         Set-FolderACL -Path $personalDir -Rules @(
             @{ Identity = "SYSTEM"; Rights = "FullControl" },
             @{ Identity = "Administrators"; Rights = "FullControl" },
@@ -302,22 +303,28 @@ function Opcion-Crear-Usuarios {
             @{ Identity = $USERNAME; Rights = "Delete,DeleteSubdirectoriesAndFiles"; Type = "Deny"; Inherit = "None" }
         )
 
+        # 2. Permiso a su raiz de FTP local (C:\inetpub\ftpanon\LocalUser\b1)
+        # Aquí NO le damos Modify, solo ReadAndExecute para que pueda ver las 3 carpetas
+        # pero no pueda crear archivos sueltos en su raiz ni borrar la raiz misma.
         Set-FolderACL -Path $USER_FTP_DIR -Rules @(
             @{ Identity = "SYSTEM"; Rights = "FullControl" },
             @{ Identity = "Administrators"; Rights = "FullControl" },
-            @{ Identity = $USERNAME; Rights = "Modify" },
-            @{ Identity = $USERNAME; Rights = "Delete,DeleteSubdirectoriesAndFiles"; Type = "Deny"; Inherit = "None" }
+            @{ Identity = $USERNAME; Rights = "ReadAndExecute" }
         )
 
+        # 3. Limpiamos junctions viejos (por si acasi)
         Remove-JunctionSafe -Path "$USER_FTP_DIR\general"
         Remove-JunctionSafe -Path "$USER_FTP_DIR\reprobados"
         Remove-JunctionSafe -Path "$USER_FTP_DIR\recursadores"
         Remove-JunctionSafe -Path "$USER_FTP_DIR\$USERNAME"
 
+        # 4. Creamos los Junctions dentro de la raiz del usuario
         cmd /c "mklink /J `"$USER_FTP_DIR\general`" `"$FTP_ROOT\general`"" | Out-Null
         cmd /c "mklink /J `"$USER_FTP_DIR\$GRUPO`" `"$FTP_ROOT\$GRUPO`"" | Out-Null
         cmd /c "mklink /J `"$USER_FTP_DIR\$USERNAME`" `"$FTP_ROOT\personal\$USERNAME`"" | Out-Null
 
+        # 5. BLOQUEO DEFINITIVO DE RENOMBRADO A LOS JUNCTIONS
+        # Aplicamos Deny a los enlaces físicos. Inherit = "None" para que no afecte el interior.
         Set-FolderACL -Path "$USER_FTP_DIR\general" -Rules @(
             @{ Identity = $USERNAME; Rights = "Delete,DeleteSubdirectoriesAndFiles"; Type = "Deny"; Inherit = "None" }
         )
@@ -334,6 +341,7 @@ function Opcion-Crear-Usuarios {
     }
     Read-Host "Presiona Enter para continuar"
 }
+
 
 
 function Opcion-Cambiar-Grupo {
