@@ -175,18 +175,18 @@ function Crear-Estructura-Base {
         @{ Identity = "SYSTEM"; Rights = "FullControl" },
         @{ Identity = "Administrators"; Rights = "FullControl" },
         @{ Identity = "IUSR"; Rights = "ReadAndExecute" },
-        @{ Identity = "reprobados"; Rights = "ReadAndExecute"; Inherit = "None" },
-        @{ Identity = "recursadores"; Rights = "ReadAndExecute"; Inherit = "None" },
-        @{ Identity = "reprobados"; Rights = "Modify"; Inherit = "ContainerInherit,ObjectInherit"; Propagate = "InheritOnly" },
-        @{ Identity = "recursadores"; Rights = "Modify"; Inherit = "ContainerInherit,ObjectInherit"; Propagate = "InheritOnly" }
+        @{ Identity = "reprobados"; Rights = "Modify" },
+        @{ Identity = "recursadores"; Rights = "Modify" },
+        @{ Identity = "reprobados"; Rights = "Delete"; Type = "Deny"; Inherit = "None" },
+        @{ Identity = "recursadores"; Rights = "Delete"; Type = "Deny"; Inherit = "None" }
     )
 
     foreach ($grupo in $GRUPOS) {
         Set-FolderACL -Path "$FTP_ROOT\$grupo" -Rules @(
             @{ Identity = "SYSTEM"; Rights = "FullControl" },
             @{ Identity = "Administrators"; Rights = "FullControl" },
-            @{ Identity = $grupo; Rights = "ReadAndExecute"; Inherit = "None" },
-            @{ Identity = $grupo; Rights = "Modify"; Inherit = "ContainerInherit,ObjectInherit"; Propagate = "InheritOnly" }
+            @{ Identity = $grupo; Rights = "Modify" },
+            @{ Identity = $grupo; Rights = "Delete"; Type = "Deny"; Inherit = "None" }
         )
     }
 
@@ -297,14 +297,14 @@ function Opcion-Crear-Usuarios {
         Set-FolderACL -Path $personalDir -Rules @(
             @{ Identity = "SYSTEM"; Rights = "FullControl" },
             @{ Identity = "Administrators"; Rights = "FullControl" },
-            @{ Identity = $USERNAME; Rights = "ReadAndExecute"; Inherit = "None" },
-            @{ Identity = $USERNAME; Rights = "Modify"; Inherit = "ContainerInherit,ObjectInherit"; Propagate = "InheritOnly" }
+            @{ Identity = $USERNAME; Rights = "Modify" },
+            @{ Identity = $USERNAME; Rights = "Delete"; Type = "Deny"; Inherit = "None" }
         )
 
         Set-FolderACL -Path $USER_FTP_DIR -Rules @(
             @{ Identity = "SYSTEM"; Rights = "FullControl" },
             @{ Identity = "Administrators"; Rights = "FullControl" },
-            @{ Identity = $USERNAME; Rights = "ReadAndExecute"; Inherit = "None" }
+            @{ Identity = $USERNAME; Rights = "ReadAndExecute" }
         )
 
         Remove-JunctionSafe -Path "$USER_FTP_DIR\general"
