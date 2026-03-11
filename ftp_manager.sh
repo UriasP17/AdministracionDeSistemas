@@ -8,7 +8,7 @@ C_RESET='\033[0m'
 
 preparar_entorno_ftp() {
     echo -e "${C_INFO}[*] Configurando servidor VSFTPD...${C_RESET}"
-    sudo dnf install -y vsftpd util-linux acl e2fsprogs &>/dev/null
+    sudo dnf install -y vsftpd util-linux acl e2fsprogs policycoreutils-python-utils &>/dev/null
 
     cat <<EOF | sudo tee /etc/vsftpd/vsftpd.conf > /dev/null
 anonymous_enable=YES
@@ -41,23 +41,20 @@ EOF
     sudo chown ftp:ftp /srv/ftp/anonymous
     sudo chmod 555 /srv/ftp/anonymous
 
-    sudo chown root:root /srv/ftp/publico
-    sudo chmod 777 /srv/ftp/publico
-    sudo chmod +t /srv/ftp/publico 
-    sudo setfacl -R -m g:grupo-ftp:rwx /srv/ftp/publico
-    sudo setfacl -R -d -m g:grupo-ftp:rwx /srv/ftp/publico
+    sudo chown root:grupo-ftp /srv/ftp/publico
+    sudo chmod 1777 /srv/ftp/publico 
+    sudo setfacl -R -m g:grupo-ftp:rwx /srv/ftp/publico 2>/dev/null
+    sudo setfacl -R -d -m g:grupo-ftp:rwx /srv/ftp/publico 2>/dev/null
 
     sudo chown root:reprobados /srv/ftp/grupos/reprobados
-    sudo chmod 775 /srv/ftp/grupos/reprobados
-    sudo chmod +t /srv/ftp/grupos/reprobados
-    sudo setfacl -R -m g:reprobados:rwx /srv/ftp/grupos/reprobados
-    sudo setfacl -R -d -m g:reprobados:rwx /srv/ftp/grupos/reprobados
+    sudo chmod 1777 /srv/ftp/grupos/reprobados
+    sudo setfacl -R -m g:reprobados:rwx /srv/ftp/grupos/reprobados 2>/dev/null
+    sudo setfacl -R -d -m g:reprobados:rwx /srv/ftp/grupos/reprobados 2>/dev/null
 
     sudo chown root:recursadores /srv/ftp/grupos/recursadores
-    sudo chmod 775 /srv/ftp/grupos/recursadores
-    sudo chmod +t /srv/ftp/grupos/recursadores
-    sudo setfacl -R -m g:recursadores:rwx /srv/ftp/grupos/recursadores
-    sudo setfacl -R -d -m g:recursadores:rwx /srv/ftp/grupos/recursadores
+    sudo chmod 1777 /srv/ftp/grupos/recursadores
+    sudo setfacl -R -m g:recursadores:rwx /srv/ftp/grupos/recursadores 2>/dev/null
+    sudo setfacl -R -d -m g:recursadores:rwx /srv/ftp/grupos/recursadores 2>/dev/null
 
     if ! grep -q "^/srv/ftp/publico /srv/ftp/anonymous/general " /etc/fstab; then
         echo "/srv/ftp/publico /srv/ftp/anonymous/general none bind,ro 0 0" | sudo tee -a /etc/fstab > /dev/null
@@ -70,8 +67,11 @@ EOF
     sudo firewall-cmd --permanent --add-port=40000-40010/tcp &>/dev/null
     sudo firewall-cmd --reload &>/dev/null
 
-    sudo setsebool -P ftpd_full_access on &>/dev/null
-    sudo setsebool -P tftp_home_dir on &>/dev/null
+    sudo setsebool -P ftpd_full_access 1 &>/dev/null
+    sudo setsebool -P tftp_home_dir 1 &>/dev/null
+
+    sudo semanage fcontext -a -t public_content_rw_t "/srv/ftp(/.*)?" 2>/dev/null
+    sudo restorecon -R /srv/ftp 2>/dev/null
 
     if ! grep -q "/sbin/nologin" /etc/shells; then
         echo "/sbin/nologin" | sudo tee -a /etc/shells > /dev/null
@@ -89,27 +89,18 @@ establecer_puntos_montaje() {
 
     sudo mkdir -p "$home_dir/general" "$home_dir/$grupo" "$home_dir/$usuario"
 
+    sudo chown root:root "$home_dir"
+    sudo chmod 555 "$home_dir"
+
+    sudo chown "$usuario:$usuario" "$home_dir/$usuario"
+    sudo chmod 700 "$home_dir/$usuario"
+
     sudo umount "$home_dir/general" 2>/dev/null
     sudo umount "$home_dir/reprobados" 2>/dev/null
     sudo umount "$home_dir/recursadores" 2>/dev/null
 
     sudo mount --bind /srv/ftp/publico "$home_dir/general"
     sudo mount --bind /srv/ftp/grupos/$grupo "$home_dir/$grupo"
-
-    sudo chown root:root "$home_dir"
-    sudo chmod 555 "$home_dir"
-
-    sudo chown root:root "$home_dir/general"
-    sudo chmod 555 "$home_dir/general"
-
-    sudo chown root:root "$home_dir/$grupo"
-    sudo chmod 555 "$home_dir/$grupo"
-
-    sudo chown "$usuario:$usuario" "$home_dir/$usuario"
-    sudo chmod 700 "$home_dir/$usuario"
-
-    sudo chattr -R -a /srv/ftp/publico 2>/dev/null
-    sudo chattr -R -a /srv/ftp/grupos/$grupo 2>/dev/null
 }
 
 dar_alta_usuario() {
@@ -205,7 +196,6 @@ eliminar_usuario() {
     sudo userdel -r "$user" &>/dev/null
 
     if [ -d "$home_dir" ]; then
-        sudo chattr -i "$home_dir" 2>/dev/null
         sudo rm -rf "$home_dir"
     fi
 
