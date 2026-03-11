@@ -292,9 +292,9 @@ function Opcion-Crear-Usuarios {
 
         $USER_FTP_DIR = "$FTP_ANON\LocalUser\$USERNAME"
         $personalDir = "$FTP_ROOT\personal\$USERNAME"
+        
         New-Item -ItemType Directory -Path $USER_FTP_DIR, $personalDir -Force | Out-Null
 
-        # Se le da acceso a su carpeta personal, pero se le prohíbe renombrarla/borrarla (la carpeta principal en sí)
         Set-FolderACL -Path $personalDir -Rules @(
             @{ Identity = "SYSTEM"; Rights = "FullControl" },
             @{ Identity = "Administrators"; Rights = "FullControl" },
@@ -302,7 +302,6 @@ function Opcion-Crear-Usuarios {
             @{ Identity = $USERNAME; Rights = "Delete,DeleteSubdirectoriesAndFiles"; Type = "Deny"; Inherit = "None" }
         )
 
-        # Se le prohíbe borrar/renombrar su carpeta raíz de usuario local
         Set-FolderACL -Path $USER_FTP_DIR -Rules @(
             @{ Identity = "SYSTEM"; Rights = "FullControl" },
             @{ Identity = "Administrators"; Rights = "FullControl" },
@@ -319,10 +318,23 @@ function Opcion-Crear-Usuarios {
         cmd /c "mklink /J `"$USER_FTP_DIR\$GRUPO`" `"$FTP_ROOT\$GRUPO`"" | Out-Null
         cmd /c "mklink /J `"$USER_FTP_DIR\$USERNAME`" `"$FTP_ROOT\personal\$USERNAME`"" | Out-Null
 
+        Set-FolderACL -Path "$USER_FTP_DIR\general" -Rules @(
+            @{ Identity = $USERNAME; Rights = "Delete,DeleteSubdirectoriesAndFiles"; Type = "Deny"; Inherit = "None" }
+        )
+        
+        Set-FolderACL -Path "$USER_FTP_DIR\$GRUPO" -Rules @(
+            @{ Identity = $USERNAME; Rights = "Delete,DeleteSubdirectoriesAndFiles"; Type = "Deny"; Inherit = "None" }
+        )
+        
+        Set-FolderACL -Path "$USER_FTP_DIR\$USERNAME" -Rules @(
+            @{ Identity = $USERNAME; Rights = "Delete,DeleteSubdirectoriesAndFiles"; Type = "Deny"; Inherit = "None" }
+        )
+
         Escribir-Exito "Usuario '$USERNAME' creado en el grupo '$GRUPO'."
     }
     Read-Host "Presiona Enter para continuar"
 }
+
 
 function Opcion-Cambiar-Grupo {
     Escribir-Titulo "CAMBIAR USUARIO DE GRUPO FTP"
