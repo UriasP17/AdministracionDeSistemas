@@ -175,18 +175,18 @@ function Crear-Estructura-Base {
         @{ Identity = "SYSTEM"; Rights = "FullControl" },
         @{ Identity = "Administrators"; Rights = "FullControl" },
         @{ Identity = "IUSR"; Rights = "ReadAndExecute" },
-        @{ Identity = "reprobados"; Rights = "Modify" },
-        @{ Identity = "recursadores"; Rights = "Modify" },
-        @{ Identity = "reprobados"; Rights = "Delete,DeleteSubdirectoriesAndFiles"; Type = "Deny"; Inherit = "None" },
-        @{ Identity = "recursadores"; Rights = "Delete,DeleteSubdirectoriesAndFiles"; Type = "Deny"; Inherit = "None" }
+        @{ Identity = "reprobados"; Rights = "ReadAndExecute"; Inherit = "None" },
+        @{ Identity = "recursadores"; Rights = "ReadAndExecute"; Inherit = "None" },
+        @{ Identity = "reprobados"; Rights = "Modify"; Inherit = "ContainerInherit,ObjectInherit"; Propagate = "InheritOnly" },
+        @{ Identity = "recursadores"; Rights = "Modify"; Inherit = "ContainerInherit,ObjectInherit"; Propagate = "InheritOnly" }
     )
 
     foreach ($grupo in $GRUPOS) {
         Set-FolderACL -Path "$FTP_ROOT\$grupo" -Rules @(
             @{ Identity = "SYSTEM"; Rights = "FullControl" },
             @{ Identity = "Administrators"; Rights = "FullControl" },
-            @{ Identity = $grupo; Rights = "Modify" },
-            @{ Identity = $grupo; Rights = "Delete,DeleteSubdirectoriesAndFiles"; Type = "Deny"; Inherit = "None" }
+            @{ Identity = $grupo; Rights = "ReadAndExecute"; Inherit = "None" },
+            @{ Identity = $grupo; Rights = "Modify"; Inherit = "ContainerInherit,ObjectInherit"; Propagate = "InheritOnly" }
         )
     }
 
@@ -294,55 +294,32 @@ function Opcion-Crear-Usuarios {
         $personalDir = "$FTP_ROOT\personal\$USERNAME"
         New-Item -ItemType Directory -Path $USER_FTP_DIR, $personalDir -Force | Out-Null
 
-        # 1. Permiso a su carpeta personal en C:\inetpub\ftproot\personal\b1
-        # Le damos Modify para adentro, pero bloqueamos borrar el propio "b1"
         Set-FolderACL -Path $personalDir -Rules @(
             @{ Identity = "SYSTEM"; Rights = "FullControl" },
             @{ Identity = "Administrators"; Rights = "FullControl" },
-            @{ Identity = $USERNAME; Rights = "Modify" },
-            @{ Identity = $USERNAME; Rights = "Delete,DeleteSubdirectoriesAndFiles"; Type = "Deny"; Inherit = "None" }
+            @{ Identity = $USERNAME; Rights = "ReadAndExecute"; Inherit = "None" },
+            @{ Identity = $USERNAME; Rights = "Modify"; Inherit = "ContainerInherit,ObjectInherit"; Propagate = "InheritOnly" }
         )
 
-        # 2. Permiso a su raiz de FTP local (C:\inetpub\ftpanon\LocalUser\b1)
-        # Aquí NO le damos Modify, solo ReadAndExecute para que pueda ver las 3 carpetas
-        # pero no pueda crear archivos sueltos en su raiz ni borrar la raiz misma.
         Set-FolderACL -Path $USER_FTP_DIR -Rules @(
             @{ Identity = "SYSTEM"; Rights = "FullControl" },
             @{ Identity = "Administrators"; Rights = "FullControl" },
-            @{ Identity = $USERNAME; Rights = "ReadAndExecute" }
+            @{ Identity = $USERNAME; Rights = "ReadAndExecute"; Inherit = "None" }
         )
 
-        # 3. Limpiamos junctions viejos (por si acasi)
         Remove-JunctionSafe -Path "$USER_FTP_DIR\general"
         Remove-JunctionSafe -Path "$USER_FTP_DIR\reprobados"
         Remove-JunctionSafe -Path "$USER_FTP_DIR\recursadores"
         Remove-JunctionSafe -Path "$USER_FTP_DIR\$USERNAME"
 
-        # 4. Creamos los Junctions dentro de la raiz del usuario
         cmd /c "mklink /J `"$USER_FTP_DIR\general`" `"$FTP_ROOT\general`"" | Out-Null
         cmd /c "mklink /J `"$USER_FTP_DIR\$GRUPO`" `"$FTP_ROOT\$GRUPO`"" | Out-Null
         cmd /c "mklink /J `"$USER_FTP_DIR\$USERNAME`" `"$FTP_ROOT\personal\$USERNAME`"" | Out-Null
-
-        # 5. BLOQUEO DEFINITIVO DE RENOMBRADO A LOS JUNCTIONS
-        # Aplicamos Deny a los enlaces físicos. Inherit = "None" para que no afecte el interior.
-        Set-FolderACL -Path "$USER_FTP_DIR\general" -Rules @(
-            @{ Identity = $USERNAME; Rights = "Delete,DeleteSubdirectoriesAndFiles"; Type = "Deny"; Inherit = "None" }
-        )
-        
-        Set-FolderACL -Path "$USER_FTP_DIR\$GRUPO" -Rules @(
-            @{ Identity = $USERNAME; Rights = "Delete,DeleteSubdirectoriesAndFiles"; Type = "Deny"; Inherit = "None" }
-        )
-        
-        Set-FolderACL -Path "$USER_FTP_DIR\$USERNAME" -Rules @(
-            @{ Identity = $USERNAME; Rights = "Delete,DeleteSubdirectoriesAndFiles"; Type = "Deny"; Inherit = "None" }
-        )
 
         Escribir-Exito "Usuario '$USERNAME' creado en el grupo '$GRUPO'."
     }
     Read-Host "Presiona Enter para continuar"
 }
-
-
 
 function Opcion-Cambiar-Grupo {
     Escribir-Titulo "CAMBIAR USUARIO DE GRUPO FTP"
@@ -406,11 +383,9 @@ function Opcion-Eliminar-Usuario {
         Stop-Service -Name "FTPSVC" -Force -ErrorAction SilentlyContinue
         Start-Sleep -Seconds 2
 
- 
         if (Test-Path $USER_FTP_DIR) {
             cmd /c "rmdir /s /q `"$USER_FTP_DIR`"" | Out-Null
         }
-
 
         if (Test-Path $personalDir) {
             cmd /c "rmdir /s /q `"$personalDir`"" | Out-Null
@@ -418,14 +393,12 @@ function Opcion-Eliminar-Usuario {
 
         Remove-LocalUser -Name $USERNAME -ErrorAction SilentlyContinue
 
- 
         Start-Service -Name "FTPSVC" -ErrorAction SilentlyContinue
 
         Escribir-Exito "Usuario '$USERNAME' eliminado por completo."
     }
     Read-Host "Presiona Enter para continuar"
 }
-
 
 function Opcion-Ver-Usuarios {
     Escribir-Titulo "LISTA DE USUARIOS FTP"
