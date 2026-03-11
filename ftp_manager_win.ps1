@@ -21,9 +21,7 @@ function Desactivar-ComplejidadPassword {
 
 function Remove-JunctionSafe {
     param([string]$Path)
-
     if (-not (Test-Path -LiteralPath $Path)) { return }
-
     try {
         $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
         if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
@@ -40,7 +38,6 @@ function Remove-JunctionSafe {
 
 function Obtener-GrupoUsuario {
     param([string]$Username)
-
     foreach ($grp in $GRUPOS) {
         $miembros = Get-LocalGroupMember -Group $grp -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
         if ($miembros -match ".*\\$Username$") { return $grp }
@@ -55,6 +52,10 @@ function Set-FolderACL {
 
     foreach ($rule in $Rules) {
         $identity = $rule.Identity
+        $accessType = if ($rule.Type) { $rule.Type } else { "Allow" }
+        $inherit = if ($rule.Inherit) { $rule.Inherit } else { "ContainerInherit,ObjectInherit" }
+        $propagate = if ($rule.Propagate) { $rule.Propagate } else { "None" }
+
         try {
             if ($identity -eq "Administrators") {
                 $resolved = New-Object System.Security.Principal.NTAccount("BUILTIN\Administrators")
@@ -63,26 +64,23 @@ function Set-FolderACL {
             } else {
                 $resolved = New-Object System.Security.Principal.NTAccount("$env:COMPUTERNAME\$identity")
             }
-
             $resolved.Translate([System.Security.Principal.SecurityIdentifier]) | Out-Null
         } catch { continue }
 
         $ace = New-Object System.Security.AccessControl.FileSystemAccessRule(
             $resolved,
             [System.Security.AccessControl.FileSystemRights]$rule.Rights,
-            "ContainerInherit,ObjectInherit",
-            "None",
-            "Allow"
+            $inherit,
+            $propagate,
+            $accessType
         )
         $acl.AddAccessRule($ace)
     }
-
     try { Set-Acl -Path $Path -AclObject $acl -ErrorAction Stop } catch { }
 }
 
 function Set-FtpAuthRules {
     param([string]$SiteName, [array]$Rules, [string]$Location = "")
-
     $configPath = "$env:SystemRoot\System32\inetsrv\config\applicationHost.config"
     Stop-Service -Name "W3SVC", "FTPSVC" -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 2
@@ -114,7 +112,6 @@ function Set-FtpAuthRules {
         $authNode = $config.CreateElement("authorization")
         $secNode.AppendChild($authNode) | Out-Null
     }
-
     $authNode.RemoveAll()
 
     foreach ($rule in $Rules) {
@@ -125,7 +122,6 @@ function Set-FtpAuthRules {
         $addNode.SetAttribute("permissions", $rule.permissions)
         $authNode.AppendChild($addNode) | Out-Null
     }
-
     $config.Save($configPath)
     Start-Service -Name "W3SVC", "FTPSVC" -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 2
@@ -133,7 +129,6 @@ function Set-FtpAuthRules {
 
 function Set-FtpUserIsolation {
     param([string]$SiteName, [string]$Mode)
-
     $configPath = "$env:SystemRoot\System32\inetsrv\config\applicationHost.config"
     Stop-Service -Name "FTPSVC", "W3SVC" -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 2
@@ -145,7 +140,6 @@ function Set-FtpUserIsolation {
         $ftpServer = $config.CreateElement("ftpServer")
         $site.AppendChild($ftpServer) | Out-Null
     }
-
     $userIsolation = $ftpServer.SelectSingleNode("userIsolation")
     if (-not $userIsolation) {
         $userIsolation = $config.CreateElement("userIsolation")
@@ -182,14 +176,17 @@ function Crear-Estructura-Base {
         @{ Identity = "Administrators"; Rights = "FullControl" },
         @{ Identity = "IUSR"; Rights = "ReadAndExecute" },
         @{ Identity = "reprobados"; Rights = "Modify" },
-        @{ Identity = "recursadores"; Rights = "Modify" }
+        @{ Identity = "recursadores"; Rights = "Modify" },
+        @{ Identity = "reprobados"; Rights = "Delete,DeleteSubdirectoriesAndFiles"; Type = "Deny"; Inherit = "None" },
+        @{ Identity = "recursadores"; Rights = "Delete,DeleteSubdirectoriesAndFiles"; Type = "Deny"; Inherit = "None" }
     )
 
     foreach ($grupo in $GRUPOS) {
         Set-FolderACL -Path "$FTP_ROOT\$grupo" -Rules @(
             @{ Identity = "SYSTEM"; Rights = "FullControl" },
             @{ Identity = "Administrators"; Rights = "FullControl" },
-            @{ Identity = $grupo; Rights = "Modify" }
+            @{ Identity = $grupo; Rights = "Modify" },
+            @{ Identity = $grupo; Rights = "Delete,DeleteSubdirectoriesAndFiles"; Type = "Deny"; Inherit = "None" }
         )
     }
 
@@ -213,14 +210,12 @@ function Crear-Estructura-Base {
 function Opcion-Instalar-FTP {
     Escribir-Titulo "Instalando componentes IIS FTP..."
     Desactivar-ComplejidadPassword
-
     $features = @("Web-Server", "Web-Ftp-Server", "Web-Ftp-Service", "Web-Mgmt-Console")
     foreach ($feature in $features) {
         if ((Get-WindowsFeature -Name $feature).InstallState -ne "Installed") {
             Install-WindowsFeature -Name $feature -IncludeManagementTools | Out-Null
         }
     }
-
     Set-Service -Name "FTPSVC" -StartupType Automatic
     Escribir-Exito "Instalacion completada."
     Read-Host "Presiona Enter para continuar"
@@ -233,14 +228,12 @@ function Opcion-Configurar-FTP {
     }
 
     Import-Module WebAdministration -Force
-
     if (Get-WebSite -Name $ftpSiteName -ErrorAction SilentlyContinue) {
         $resp = Read-Host "Deseas rehacer la configuracion? (s/n)"
         if ($resp -notmatch "^[sS]$") { return }
 
         Stop-Service -Name "W3SVC", "FTPSVC" -Force -ErrorAction SilentlyContinue
         Remove-WebSite -Name $ftpSiteName
-
         if (Test-Path $FTP_ROOT) { Remove-Item $FTP_ROOT -Recurse -Force }
         if (Test-Path $FTP_ANON) { Remove-Item $FTP_ANON -Recurse -Force }
     }
@@ -288,11 +281,9 @@ function Opcion-Crear-Usuarios {
 
         try {
             New-LocalUser -Name $USERNAME -Password $PASSWORD -PasswordNeverExpires -ErrorAction Stop | Out-Null
-
             foreach ($grp in $GRUPOS) {
                 Remove-LocalGroupMember -Group $grp -Member $USERNAME -ErrorAction SilentlyContinue
             }
-
             Add-LocalGroupMember -Group $GRUPO -Member $USERNAME -ErrorAction SilentlyContinue
         } catch {
             Escribir-ErrorMsg "Error al crear usuario. Verifica las politicas de contrasena o permisos."
@@ -301,19 +292,22 @@ function Opcion-Crear-Usuarios {
 
         $USER_FTP_DIR = "$FTP_ANON\LocalUser\$USERNAME"
         $personalDir = "$FTP_ROOT\personal\$USERNAME"
-
         New-Item -ItemType Directory -Path $USER_FTP_DIR, $personalDir -Force | Out-Null
 
+        # Se le da acceso a su carpeta personal, pero se le prohíbe renombrarla/borrarla (la carpeta principal en sí)
         Set-FolderACL -Path $personalDir -Rules @(
             @{ Identity = "SYSTEM"; Rights = "FullControl" },
             @{ Identity = "Administrators"; Rights = "FullControl" },
-            @{ Identity = $USERNAME; Rights = "Modify" }
+            @{ Identity = $USERNAME; Rights = "Modify" },
+            @{ Identity = $USERNAME; Rights = "Delete,DeleteSubdirectoriesAndFiles"; Type = "Deny"; Inherit = "None" }
         )
 
+        # Se le prohíbe borrar/renombrar su carpeta raíz de usuario local
         Set-FolderACL -Path $USER_FTP_DIR -Rules @(
             @{ Identity = "SYSTEM"; Rights = "FullControl" },
             @{ Identity = "Administrators"; Rights = "FullControl" },
-            @{ Identity = $USERNAME; Rights = "Modify" }
+            @{ Identity = $USERNAME; Rights = "Modify" },
+            @{ Identity = $USERNAME; Rights = "Delete,DeleteSubdirectoriesAndFiles"; Type = "Deny"; Inherit = "None" }
         )
 
         Remove-JunctionSafe -Path "$USER_FTP_DIR\general"
@@ -327,7 +321,6 @@ function Opcion-Crear-Usuarios {
 
         Escribir-Exito "Usuario '$USERNAME' creado en el grupo '$GRUPO'."
     }
-
     Read-Host "Presiona Enter para continuar"
 }
 
@@ -401,7 +394,6 @@ function Opcion-Eliminar-Usuario {
 
         Escribir-Exito "Usuario '$USERNAME' eliminado por completo."
     }
-
     Read-Host "Presiona Enter para continuar"
 }
 
