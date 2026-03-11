@@ -370,6 +370,7 @@ function Opcion-Eliminar-Usuario {
 
     $confirm = Read-Host "Estas seguro de eliminar a '$USERNAME'? Todo su FTP se borrara (s/n)"
     if ($confirm -match "^[sS]$") {
+       
         foreach ($grupo in $GRUPOS) {
             Remove-LocalGroupMember -Group $grupo -Member $USERNAME -ErrorAction SilentlyContinue
         }
@@ -382,20 +383,26 @@ function Opcion-Eliminar-Usuario {
         Remove-JunctionSafe -Path "$USER_FTP_DIR\recursadores"
         Remove-JunctionSafe -Path "$USER_FTP_DIR\$USERNAME"
 
-        Remove-LocalUser -Name $USERNAME -ErrorAction SilentlyContinue
+        Stop-Service -Name "FTPSVC" -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
 
         if (Test-Path $USER_FTP_DIR) {
             cmd /c "rmdir /s /q `"$USER_FTP_DIR`"" | Out-Null
         }
 
         if (Test-Path $personalDir) {
-            Remove-Item -LiteralPath $personalDir -Recurse -Force -ErrorAction SilentlyContinue
+            cmd /c "rmdir /s /q `"$personalDir`"" | Out-Null
         }
+
+     
+        Remove-LocalUser -Name $USERNAME -ErrorAction SilentlyContinue
+        Start-Service -Name "FTPSVC" -ErrorAction SilentlyContinue
 
         Escribir-Exito "Usuario '$USERNAME' eliminado por completo."
     }
     Read-Host "Presiona Enter para continuar"
 }
+
 
 function Opcion-Ver-Usuarios {
     Escribir-Titulo "LISTA DE USUARIOS FTP"
