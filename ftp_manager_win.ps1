@@ -10,7 +10,11 @@ $GRUPOS = @("reprobados", "recursadores")
 function Escribir-Titulo { 
     param([string]$texto)
     Write-Host "`n  ╔══════════════════════════════════════════════════╗" -ForegroundColor Cyan
-    $espacios = " " * (48 - $texto.Length)
+    
+    $espaciosCount = 48 - $texto.Length
+    if ($espaciosCount -lt 0) { $espaciosCount = 0 }
+    $espacios = " " * $espaciosCount
+    
     Write-Host "  ║ " -ForegroundColor Cyan -NoNewline
     Write-Host "$texto" -ForegroundColor White -NoNewline
     Write-Host "$espacios ║" -ForegroundColor Cyan
@@ -247,7 +251,7 @@ function Opcion-Instalar-FTP {
     Escribir-Exito "Componentes IIS FTP instalados correctamente."
     
     Escribir-Info "Configurando estructura y permisos del sitio..."
-    Import-Module WebAdministration -Force
+    Import-Module WebAdministration -Force -ErrorAction SilentlyContinue
     if (Get-WebSite -Name $ftpSiteName -ErrorAction SilentlyContinue) {
         Stop-Service -Name "W3SVC", "FTPSVC" -Force -ErrorAction SilentlyContinue
         Remove-WebSite -Name $ftpSiteName
@@ -320,7 +324,9 @@ function Opcion-Crear-Usuarios {
 
         $USER_FTP_DIR = "$FTP_ANON\LocalUser\$USERNAME"
         $personalDir = "$FTP_ROOT\personal\$USERNAME"
-        New-Item -ItemType Directory -Path $USER_FTP_DIR, $personalDir -Force | Out-Null
+        
+        New-Item -ItemType Directory -Path $USER_FTP_DIR -Force | Out-Null
+        New-Item -ItemType Directory -Path $personalDir -Force | Out-Null
 
         Set-FolderACL -Path $personalDir -Rules @(
             @{ Identity = "SYSTEM"; Rights = "FullControl" },
@@ -475,7 +481,8 @@ function Opcion-Ver-Usuarios {
 }
 
 function Menu-Principal {
-    $Host.UI.RawUI.WindowTitle = "Panel de Administracion FTP - IIS"
+    try { $Host.UI.RawUI.WindowTitle = "Panel de Administracion FTP - IIS" } catch {}
+    
     while ($true) {
         Clear-Host
         Write-Host "`n"
@@ -516,8 +523,8 @@ function Menu-Principal {
             default { Escribir-ErrorMsg "Opcion no valida." }
         }
         
-        Write-Host "`n  Presiona ENTER para volver al menu principal..." -ForegroundColor DarkGray
-        $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+        Write-Host ""
+        $null = Read-Host "  Presiona ENTER para volver al menu principal..."
     }
 }
 
