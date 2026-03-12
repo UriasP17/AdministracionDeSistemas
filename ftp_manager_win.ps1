@@ -6,14 +6,36 @@ $FTP_ROOT = "C:\inetpub\ftproot"
 $FTP_ANON = "C:\inetpub\ftpanon"
 $GRUPOS = @("reprobados", "recursadores")
 
+# --- FUNCIONES DE INTERFAZ TIPO TUI ---
 function Escribir-Titulo { 
     param([string]$texto)
-    Write-Host "`n  -- $texto --" -ForegroundColor Magenta
+    Write-Host "`n  ╔══════════════════════════════════════════════════╗" -ForegroundColor Cyan
+    $espacios = " " * (48 - $texto.Length)
+    Write-Host "  ║ " -ForegroundColor Cyan -NoNewline
+    Write-Host "$texto" -ForegroundColor White -NoNewline
+    Write-Host "$espacios ║" -ForegroundColor Cyan
+    Write-Host "  ╚══════════════════════════════════════════════════╝" -ForegroundColor Cyan
 }
-function Escribir-Exito { param([string]$texto); Write-Host "  OK  $texto" -ForegroundColor Green }
-function Escribir-ErrorMsg { param([string]$texto); Write-Host "  ERR  $texto" -ForegroundColor Red }
-function Escribir-Info { param([string]$texto); Write-Host "  >>  $texto" -ForegroundColor Yellow }
 
+function Escribir-Exito { 
+    param([string]$texto)
+    Write-Host "  [+] " -ForegroundColor Green -NoNewline
+    Write-Host $texto -ForegroundColor Gray
+}
+
+function Escribir-ErrorMsg { 
+    param([string]$texto)
+    Write-Host "  [X] " -ForegroundColor Red -NoNewline
+    Write-Host $texto -ForegroundColor Gray
+}
+
+function Escribir-Info { 
+    param([string]$texto)
+    Write-Host "  [i] " -ForegroundColor Yellow -NoNewline
+    Write-Host $texto -ForegroundColor Gray
+}
+
+# --- FUNCIONES CORE DEL FTP ---
 function Desactivar-ComplejidadPassword {
     $outfile = "$Env:TEMP\secpol.cfg"
     secedit /export /cfg $outfile /quiet
@@ -210,9 +232,10 @@ function Crear-Estructura-Base {
     cmd /c "mklink /J `"$anonJunction`" `"$FTP_ROOT\general`"" | Out-Null
 }
 
+# --- OPCIONES DEL MENU ---
 function Opcion-Instalar-FTP {
-    Escribir-Titulo "Instalar y configurar servidor"
-    Escribir-Info "Instalando componentes IIS FTP..."
+    Escribir-Titulo "Instalar y configurar servidor FTP"
+    Escribir-Info "Instalando componentes IIS..."
     Desactivar-ComplejidadPassword
     $features = @("Web-Server", "Web-Ftp-Server", "Web-Ftp-Service", "Web-Mgmt-Console")
     foreach ($feature in $features) {
@@ -221,9 +244,9 @@ function Opcion-Instalar-FTP {
         }
     }
     Set-Service -Name "FTPSVC" -StartupType Automatic
-    Escribir-Exito "Componentes instalados."
+    Escribir-Exito "Componentes IIS FTP instalados correctamente."
     
-    Escribir-Info "Configurando sitio FTP..."
+    Escribir-Info "Configurando estructura y permisos del sitio..."
     Import-Module WebAdministration -Force
     if (Get-WebSite -Name $ftpSiteName -ErrorAction SilentlyContinue) {
         Stop-Service -Name "W3SVC", "FTPSVC" -Force -ErrorAction SilentlyContinue
@@ -253,31 +276,37 @@ function Opcion-Instalar-FTP {
     }
 
     Start-Service -Name "FTPSVC" -ErrorAction SilentlyContinue
-    Escribir-Exito "Servidor FTP listo y en ejecucion."
+    Escribir-Exito "Servidor FTP configurado y en ejecucion."
 }
 
 function Opcion-Crear-Usuarios {
-    Escribir-Titulo "Agregar usuarios"
+    Escribir-Titulo "Crear Nuevos Usuarios"
     Desactivar-ComplejidadPassword
-    $N = Read-Host "  Cuantos usuarios deseas crear?"
+    Write-Host "  > " -ForegroundColor Yellow -NoNewline
+    $N = Read-Host "Cuantos usuarios deseas crear?"
 
     if ($N -notmatch "^\d+$" -or $N -eq "0") {
-        Escribir-ErrorMsg "Numero invalido."
+        Escribir-ErrorMsg "Cantidad invalida."
         return
     }
 
     for ($i = 1; $i -le [int]$N; $i++) {
-        Write-Host ""
-        $USERNAME = Read-Host "  Nombre ($i/$N)"
+        Write-Host "`n  --- Usuario $i de $N ---" -ForegroundColor DarkCyan
+        Write-Host "  > " -ForegroundColor Yellow -NoNewline
+        $USERNAME = Read-Host "Nombre de usuario"
+        
         if (Get-LocalUser -Name $USERNAME -ErrorAction SilentlyContinue) {
-            Escribir-ErrorMsg "El usuario '$USERNAME' ya existe en el sistema."
+            Escribir-ErrorMsg "El usuario '$USERNAME' ya existe en el sistema operativo."
             continue
         }
 
-        $PASSWORD = Read-Host "  Contrasena" -AsSecureString
-        $GRUPO_SEL = Read-Host "  Grupo (1: reprobados | 2: recursadores)"
+        Write-Host "  > " -ForegroundColor Yellow -NoNewline
+        $PASSWORD = Read-Host "Contrasena" -AsSecureString
+        Write-Host "  > " -ForegroundColor Yellow -NoNewline
+        $GRUPO_SEL = Read-Host "Grupo (1: reprobados | 2: recursadores)"
         $GRUPO = if ($GRUPO_SEL -eq "1") { "reprobados" } else { "recursadores" }
 
+        Escribir-Info "Generando cuentas y carpetas..."
         try {
             New-LocalUser -Name $USERNAME -Password $PASSWORD -PasswordNeverExpires -ErrorAction Stop | Out-Null
             foreach ($grp in $GRUPOS) {
@@ -285,7 +314,7 @@ function Opcion-Crear-Usuarios {
             }
             Add-LocalGroupMember -Group $GRUPO -Member $USERNAME -ErrorAction SilentlyContinue
         } catch {
-            Escribir-ErrorMsg "Error al crear la cuenta. Verifica politicas o permisos."
+            Escribir-ErrorMsg "Fallo al crear la cuenta. Verifica politicas de contrasena."
             continue
         }
 
@@ -315,30 +344,35 @@ function Opcion-Crear-Usuarios {
         cmd /c "mklink /J `"$USER_FTP_DIR\$GRUPO`" `"$FTP_ROOT\$GRUPO`"" | Out-Null
         cmd /c "mklink /J `"$USER_FTP_DIR\$USERNAME`" `"$FTP_ROOT\personal\$USERNAME`"" | Out-Null
 
-        Escribir-Exito "'$USERNAME' registrado en el grupo '$GRUPO'."
+        Escribir-Exito "Cuenta '$USERNAME' creada exitosamente en '$GRUPO'."
     }
 }
 
 function Opcion-Cambiar-Grupo {
-    Escribir-Titulo "Reasignar grupo"
-    $USERNAME = Read-Host "  Usuario"
+    Escribir-Titulo "Reasignar Grupo de Usuario"
+    Write-Host "  > " -ForegroundColor Yellow -NoNewline
+    $USERNAME = Read-Host "Nombre del usuario a reasignar"
 
     if (-not (Get-LocalUser -Name $USERNAME -ErrorAction SilentlyContinue)) {
-        return Escribir-ErrorMsg "No se encontro el usuario '$USERNAME'."
+        return Escribir-ErrorMsg "El usuario '$USERNAME' no existe."
     }
 
     $GRUPO_ACTUAL = Obtener-GrupoUsuario -Username $USERNAME
     if (-not $GRUPO_ACTUAL) {
-        return Escribir-ErrorMsg "El usuario no pertenece a ningun grupo FTP."
+        return Escribir-ErrorMsg "El usuario no pertenece a ningun grupo FTP manejado."
     }
 
-    $NUEVO_GRUPO_SEL = Read-Host "  Nuevo grupo (1: reprobados | 2: recursadores)"
+    Write-Host "  >> Grupo actual: " -ForegroundColor DarkGray -NoNewline
+    Write-Host $GRUPO_ACTUAL -ForegroundColor Cyan
+    Write-Host "  > " -ForegroundColor Yellow -NoNewline
+    $NUEVO_GRUPO_SEL = Read-Host "Selecciona nuevo grupo (1: reprobados | 2: recursadores)"
     $NUEVO_GRUPO = if ($NUEVO_GRUPO_SEL -eq "1") { "reprobados" } else { "recursadores" }
 
     if ($GRUPO_ACTUAL -eq $NUEVO_GRUPO) {
-        return Escribir-ErrorMsg "'$USERNAME' ya pertenece a $NUEVO_GRUPO."
+        return Escribir-ErrorMsg "'$USERNAME' ya forma parte del grupo '$NUEVO_GRUPO'."
     }
 
+    Escribir-Info "Procesando migracion de enlaces..."
     Remove-LocalGroupMember -Group $GRUPO_ACTUAL -Member $USERNAME -ErrorAction SilentlyContinue
     Add-LocalGroupMember -Group $NUEVO_GRUPO -Member $USERNAME -ErrorAction SilentlyContinue
 
@@ -354,20 +388,23 @@ function Opcion-Cambiar-Grupo {
     Start-Sleep -Seconds 1
     Start-Service -Name "FTPSVC" -ErrorAction SilentlyContinue
 
-    Escribir-Exito "'$USERNAME' movido a '$NUEVO_GRUPO' sin problemas."
+    Escribir-Exito "Migracion completada: '$USERNAME' ahora es de '$NUEVO_GRUPO'."
 }
 
 function Opcion-Eliminar-Usuario {
-    Escribir-Titulo "Borrar usuario"
-    $USERNAME = Read-Host "  Usuario a eliminar"
+    Escribir-Titulo "Borrar Usuario del Servidor"
+    Write-Host "  > " -ForegroundColor Yellow -NoNewline
+    $USERNAME = Read-Host "Nombre del usuario a eliminar"
 
     if (-not (Get-LocalUser -Name $USERNAME -ErrorAction SilentlyContinue)) {
-        return Escribir-ErrorMsg "No se encontro el usuario '$USERNAME'."
+        return Escribir-ErrorMsg "El usuario '$USERNAME' no existe."
     }
 
-    $confirm = Read-Host "  Confirmar borrado de '$USERNAME' (s/n)"
+    Write-Host "  > " -ForegroundColor Red -NoNewline
+    $confirm = Read-Host "Seguro que deseas eliminar a '$USERNAME' permanentemente? (s/n)"
     if ($confirm -match "^[sS]$") {
 
+        Escribir-Info "Limpiando archivos y configuraciones..."
         foreach ($grupo in $GRUPOS) {
             Remove-LocalGroupMember -Group $grupo -Member $USERNAME -ErrorAction SilentlyContinue
         }
@@ -386,7 +423,6 @@ function Opcion-Eliminar-Usuario {
         if (Test-Path $USER_FTP_DIR) {
             cmd /c "rmdir /s /q `"$USER_FTP_DIR`"" | Out-Null
         }
-
         if (Test-Path $personalDir) {
             cmd /c "rmdir /s /q `"$personalDir`"" | Out-Null
         }
@@ -394,12 +430,14 @@ function Opcion-Eliminar-Usuario {
         Remove-LocalUser -Name $USERNAME -ErrorAction SilentlyContinue
         Start-Service -Name "FTPSVC" -ErrorAction SilentlyContinue
 
-        Escribir-Exito "'$USERNAME' ha sido eliminado del sistema."
+        Escribir-Exito "El usuario '$USERNAME' ha sido borrado del sistema."
+    } else {
+        Escribir-Info "Operacion cancelada por el administrador."
     }
 }
 
 function Opcion-Ver-Usuarios {
-    Escribir-Titulo "Usuarios registrados en el servidor FTP"
+    Escribir-Titulo "Directorio de Usuarios FTP"
     $usuariosEncontrados = @()
 
     foreach ($grupo in $GRUPOS) {
@@ -414,34 +452,55 @@ function Opcion-Ver-Usuarios {
     }
 
     if ($usuariosEncontrados.Count -eq 0) {
-        Write-Host "  Sin usuarios registrados." -ForegroundColor DarkGray
+        Write-Host "`n  No se encontraron usuarios registrados en la base de datos." -ForegroundColor DarkGray
     } else {
-        Write-Host "  USUARIO                GRUPO" -ForegroundColor Yellow
-        Write-Host "  ----------------------------------------" -ForegroundColor DarkGray
+        Write-Host "`n  ==================================================" -ForegroundColor DarkGray
+        Write-Host "  | " -NoNewline -ForegroundColor DarkGray
+        Write-Host "USUARIO".PadRight(25) -ForegroundColor Cyan -NoNewline
+        Write-Host " | " -NoNewline -ForegroundColor DarkGray
+        Write-Host "GRUPO ASIGNADO".PadRight(18) -ForegroundColor Cyan -NoNewline
+        Write-Host " |" -ForegroundColor DarkGray
+        Write-Host "  ==================================================" -ForegroundColor DarkGray
+        
         foreach ($u in ($usuariosEncontrados | Sort-Object Usuario)) {
-            $color = if ($u.Grupo -eq "reprobados") { "Red" } else { "Yellow" }
-            $uName = $u.Usuario.PadRight(22)
-            Write-Host "  $uName " -NoNewline
-            Write-Host $u.Grupo -ForegroundColor $color
+            $colorGrupo = if ($u.Grupo -eq "reprobados") { "Red" } else { "Yellow" }
+            Write-Host "  | " -NoNewline -ForegroundColor DarkGray
+            Write-Host $u.Usuario.PadRight(25) -ForegroundColor White -NoNewline
+            Write-Host " | " -NoNewline -ForegroundColor DarkGray
+            Write-Host $u.Grupo.PadRight(18) -ForegroundColor $colorGrupo -NoNewline
+            Write-Host " |" -ForegroundColor DarkGray
         }
-        Write-Host "  ----------------------------------------" -ForegroundColor DarkGray
+        Write-Host "  ==================================================" -ForegroundColor DarkGray
     }
 }
 
 function Menu-Principal {
+    $Host.UI.RawUI.WindowTitle = "Panel de Administracion FTP - IIS"
     while ($true) {
         Clear-Host
-        Write-Host "`n  ADMINISTRADOR FTP  //  Windows Server + IIS" -ForegroundColor Magenta
-        Write-Host "  ----------------------------------------" -ForegroundColor DarkGray
-        Write-Host "  " -NoNewline; Write-Host "1. " -ForegroundColor Yellow -NoNewline; Write-Host "Instalar y configurar servidor"
-        Write-Host "  " -NoNewline; Write-Host "2. " -ForegroundColor Yellow -NoNewline; Write-Host "Agregar usuarios"
-        Write-Host "  " -NoNewline; Write-Host "3. " -ForegroundColor Yellow -NoNewline; Write-Host "Reasignar grupo"
-        Write-Host "  " -NoNewline; Write-Host "4. " -ForegroundColor Yellow -NoNewline; Write-Host "Borrar usuario"
-        Write-Host "  " -NoNewline; Write-Host "5. " -ForegroundColor Yellow -NoNewline; Write-Host "Listar usuarios"
-        Write-Host "  " -NoNewline; Write-Host "0. " -ForegroundColor Red -NoNewline; Write-Host "Salir"
-        Write-Host "  ----------------------------------------" -ForegroundColor DarkGray
+        Write-Host "`n"
+        Write-Host "    ███████╗████████╗██████╗     " -ForegroundColor Cyan
+        Write-Host "    ██╔════╝╚══██╔══╝██╔══██╗    " -ForegroundColor Cyan
+        Write-Host "    █████╗     ██║   ██████╔╝    " -ForegroundColor Cyan
+        Write-Host "    ██╔══╝     ██║   ██╔═══╝     " -ForegroundColor Cyan
+        Write-Host "    ██║        ██║   ██║         " -ForegroundColor Cyan
+        Write-Host "    ╚═╝        ╚═╝   ╚═╝         " -ForegroundColor Cyan
+        Write-Host "  ──────────────────────────────────────────" -ForegroundColor DarkGray
+        Write-Host "     ADMINISTRADOR FTP // IIS WINDOWS" -ForegroundColor Magenta
+        Write-Host "  ──────────────────────────────────────────" -ForegroundColor DarkGray
+        Write-Host ""
         
-        $opt = Read-Host "  Opcion"
+        Write-Host "    [" -ForegroundColor DarkGray -NoNewline; Write-Host "1" -ForegroundColor Cyan -NoNewline; Write-Host "] " -ForegroundColor DarkGray -NoNewline; Write-Host "Instalar y configurar servidor"
+        Write-Host "    [" -ForegroundColor DarkGray -NoNewline; Write-Host "2" -ForegroundColor Cyan -NoNewline; Write-Host "] " -ForegroundColor DarkGray -NoNewline; Write-Host "Agregar usuarios"
+        Write-Host "    [" -ForegroundColor DarkGray -NoNewline; Write-Host "3" -ForegroundColor Cyan -NoNewline; Write-Host "] " -ForegroundColor DarkGray -NoNewline; Write-Host "Reasignar grupo a usuario"
+        Write-Host "    [" -ForegroundColor DarkGray -NoNewline; Write-Host "4" -ForegroundColor Cyan -NoNewline; Write-Host "] " -ForegroundColor DarkGray -NoNewline; Write-Host "Borrar usuario"
+        Write-Host "    [" -ForegroundColor DarkGray -NoNewline; Write-Host "5" -ForegroundColor Cyan -NoNewline; Write-Host "] " -ForegroundColor DarkGray -NoNewline; Write-Host "Directorio de usuarios"
+        Write-Host ""
+        Write-Host "    [" -ForegroundColor DarkGray -NoNewline; Write-Host "0" -ForegroundColor Red -NoNewline; Write-Host "] " -ForegroundColor DarkGray -NoNewline; Write-Host "Salir"
+        Write-Host "`n  ──────────────────────────────────────────" -ForegroundColor DarkGray
+        
+        Write-Host "  > " -ForegroundColor Yellow -NoNewline
+        $opt = Read-Host "Elige una opcion"
 
         switch ($opt) {
             "1" { Opcion-Instalar-FTP }
@@ -449,11 +508,15 @@ function Menu-Principal {
             "3" { Opcion-Cambiar-Grupo }
             "4" { Opcion-Eliminar-Usuario }
             "5" { Opcion-Ver-Usuarios }
-            "0" { exit }
-            default { Escribir-ErrorMsg "Opcion no reconocida." }
+            "0" { 
+                Write-Host "`n  Cerrando administrador..." -ForegroundColor DarkGray
+                Start-Sleep -Seconds 1
+                exit 
+            }
+            default { Escribir-ErrorMsg "Opcion no valida." }
         }
         
-        Write-Host "`n  Presiona ENTER para volver al menu..." -ForegroundColor DarkGray
+        Write-Host "`n  Presiona ENTER para volver al menu principal..." -ForegroundColor DarkGray
         $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
     }
 }
