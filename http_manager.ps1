@@ -17,15 +17,13 @@ Function Instalar-IIS {
     
     Write-Host "[*] Configurando puerto al $puerto..." -ForegroundColor Yellow
     
-    # FORMA A PRUEBA DE BLOQUEOS (HRESULT 0x80070021)
-    # 1. Quitar todos los bindings existentes uno por uno
     $bindings = Get-WebBinding -Name "Default Web Site" -ErrorAction SilentlyContinue
     if ($bindings) {
         foreach ($b in $bindings) {
             Remove-WebBinding -Name "Default Web Site" -BindingInformation $b.bindingInformation -ErrorAction SilentlyContinue
         }
     }
-    # 2. Agregar el nuevo binding limpio
+    
     New-WebBinding -Name "Default Web Site" -Protocol http -Port $puerto -IPAddress "*" -ErrorAction SilentlyContinue
     
     $webRoot = "C:\inetpub\wwwroot"
@@ -41,7 +39,6 @@ Function Instalar-IIS {
 
     Write-Host "[*] Aplicando seguridad (Ocultar version y bloquear metodos)..." -ForegroundColor Yellow
     
-    # Bloques try/catch silenciosos
     try { Remove-WebConfigurationProperty -PSPath "IIS:\Sites\Default Web Site" -Filter "system.webServer/httpProtocol/customHeaders" -Name "." -AtElement @{name='X-Powered-By'} -ErrorAction Stop } catch {}
     try { Remove-WebConfigurationProperty -PSPath "IIS:\Sites\Default Web Site" -Filter "system.webServer/httpProtocol/customHeaders" -Name "." -AtElement @{name='X-Frame-Options'} -ErrorAction Stop } catch {}
     try { Remove-WebConfigurationProperty -PSPath "IIS:\Sites\Default Web Site" -Filter "system.webServer/httpProtocol/customHeaders" -Name "." -AtElement @{name='X-Content-Type-Options'} -ErrorAction Stop } catch {}
@@ -106,7 +103,7 @@ Function Instalar-Opcional {
         $conf = "C:\tools\nginx\conf\nginx.conf"
         (Get-Content $conf) -replace "listen\s+80;", "listen       $puerto;" | Set-Content $conf
         "Servidor: Nginx - Version: $ver - Puerto: $puerto" | Out-File "C:\tools\nginx\html\index.html"
-        Start-Process "C:\tools\nginx\nginx.exe" -WorkingDirectory "C:\tools\nginx"
+        Start-Process "C:\tools\nginx\nginx.exe" -WorkingDirectory "C:\tools\nginx" -NoNewWindow
     }
 
     if ($Servicio -eq "apache") {
@@ -122,6 +119,33 @@ Function Instalar-Opcional {
     Write-Host "[+] $Servicio instalado en el puerto $puerto" -ForegroundColor Green
 }
 
+Function Desinstalar-Servicio {
+    param($Servicio)
+    Write-Host "`n[*] Desinstalando $Servicio..." -ForegroundColor Yellow
+
+    if ($Servicio -eq "iis") {
+        Stop-Service -Name W3SVC -ErrorAction SilentlyContinue
+        Uninstall-WindowsFeature -Name Web-Server -IncludeManagementTools | Out-Null
+        Remove-Item "C:\inetpub" -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-NetFirewallRule -DisplayName "HTTP-IIS-Custom" -ErrorAction SilentlyContinue
+        Write-Host "[+] IIS desinstalado correctamente." -ForegroundColor Green
+    }
+    elseif ($Servicio -eq "apache") {
+        Stop-Service -Name Apache2.4 -ErrorAction SilentlyContinue
+        choco uninstall apache-httpd -y --force | Out-Null
+        Remove-Item "C:\tools\apache24" -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-NetFirewallRule -DisplayName "HTTP-apache" -ErrorAction SilentlyContinue
+        Write-Host "[+] Apache desinstalado correctamente." -ForegroundColor Green
+    }
+    elseif ($Servicio -eq "nginx") {
+        Stop-Process -Name nginx -Force -ErrorAction SilentlyContinue
+        choco uninstall nginx -y --force | Out-Null
+        Remove-Item "C:\tools\nginx" -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-NetFirewallRule -DisplayName "HTTP-nginx" -ErrorAction SilentlyContinue
+        Write-Host "[+] Nginx desinstalado correctamente." -ForegroundColor Green
+    }
+}
+
 if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
     Write-Host "[!] Chocolatey no esta instalado. Instalando..." -ForegroundColor Yellow
     Set-ExecutionPolicy Bypass -Scope Process -Force
@@ -134,6 +158,9 @@ while ($true) {
     Write-Host "1) Instalar IIS (Obligatorio)"
     Write-Host "2) Instalar Apache (Opcional)"
     Write-Host "3) Instalar Nginx (Opcional)"
+    Write-Host "4) Desinstalar IIS"
+    Write-Host "5) Desinstalar Apache"
+    Write-Host "6) Desinstalar Nginx"
     Write-Host "0) Salir"
     
     $opt = Read-Host "Elige una opcion"
@@ -141,6 +168,9 @@ while ($true) {
         "1" { Instalar-IIS }
         "2" { Instalar-Opcional -Servicio "apache" }
         "3" { Instalar-Opcional -Servicio "nginx" }
+        "4" { Desinstalar-Servicio -Servicio "iis" }
+        "5" { Desinstalar-Servicio -Servicio "apache" }
+        "6" { Desinstalar-Servicio -Servicio "nginx" }
         "0" { exit }
         default { Write-Host "Opcion no valida." -ForegroundColor Red }
     }
