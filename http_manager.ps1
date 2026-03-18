@@ -1,159 +1,127 @@
-#Requires -RunAsAdministrator
-Import-Module ServerManager -ErrorAction SilentlyContinue
-Import-Module WebAdministration -ErrorAction SilentlyContinue
+# ==========================================
+# SCRIPT DE GESTION DE SERVIDORES WEB
+# ==========================================
 
-Function Instalar-IIS {
-    $puerto = Read-Host "Ingresa el puerto para IIS (ej. 80, 8080)"
-    if ([string]::IsNullOrWhiteSpace($puerto)) { $puerto = 80 }
-
-    $ocupado = Test-NetConnection -ComputerName localhost -Port $puerto -WarningAction SilentlyContinue
-    if ($ocupado.TcpTestSucceeded) {
-        Write-Host "[X] Error: El puerto $puerto ya esta en uso." -ForegroundColor Red
-        return
-    }
-
-    Write-Host "`n[*] Instalando IIS silenciosamente..." -ForegroundColor Cyan
-    Install-WindowsFeature -Name Web-Server -IncludeManagementTools | Out-Null
-    
-    Write-Host "[*] Configurando puerto al $puerto..." -ForegroundColor Yellow
-    
-    $bindings = Get-WebBinding -Name "Default Web Site" -ErrorAction SilentlyContinue
-    if ($bindings) {
-        foreach ($b in $bindings) {
-            Remove-WebBinding -Name "Default Web Site" -BindingInformation $b.bindingInformation -ErrorAction SilentlyContinue
-        }
-    }
-    
-    New-WebBinding -Name "Default Web Site" -Protocol http -Port $puerto -IPAddress "*" -ErrorAction SilentlyContinue
-    
-    $webRoot = "C:\inetpub\wwwroot"
-    Remove-Item "$webRoot\iisstart.*" -Force -ErrorAction SilentlyContinue
-    "Servidor: IIS - Version: 10.0 - Puerto: $puerto" | Out-File "$webRoot\index.html"
-
-    $acl = Get-Acl $webRoot
-    $regla = New-Object System.Security.AccessControl.FileSystemAccessRule("IUSR", "ReadAndExecute", "ContainerInherit,ObjectInherit", "None", "Allow")
-    $acl.AddAccessRule($regla)
-    Set-Acl $webRoot $acl
-
-    New-NetFirewallRule -DisplayName "HTTP-IIS-Custom" -LocalPort $puerto -Protocol TCP -Action Allow -ErrorAction SilentlyContinue | Out-Null
-
-    Write-Host "[*] Aplicando seguridad (Ocultar version y bloquear metodos)..." -ForegroundColor Yellow
-    
-    try { Remove-WebConfigurationProperty -PSPath "IIS:\Sites\Default Web Site" -Filter "system.webServer/httpProtocol/customHeaders" -Name "." -AtElement @{name='X-Powered-By'} -ErrorAction Stop } catch {}
-    try { Remove-WebConfigurationProperty -PSPath "IIS:\Sites\Default Web Site" -Filter "system.webServer/httpProtocol/customHeaders" -Name "." -AtElement @{name='X-Frame-Options'} -ErrorAction Stop } catch {}
-    try { Remove-WebConfigurationProperty -PSPath "IIS:\Sites\Default Web Site" -Filter "system.webServer/httpProtocol/customHeaders" -Name "." -AtElement @{name='X-Content-Type-Options'} -ErrorAction Stop } catch {}
-    try { Remove-WebConfigurationProperty -PSPath "IIS:\Sites\Default Web Site" -Filter "system.webServer/security/requestFiltering/verbs" -Name "." -AtElement @{verb='TRACE'} -ErrorAction Stop } catch {}
-    try { Remove-WebConfigurationProperty -PSPath "IIS:\Sites\Default Web Site" -Filter "system.webServer/security/requestFiltering/verbs" -Name "." -AtElement @{verb='DELETE'} -ErrorAction Stop } catch {}
-
-    Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST/Default Web Site' -Filter "system.webServer/security/requestFiltering" -Name "removeServerHeader" -Value "True" -ErrorAction SilentlyContinue
-    
-    Add-WebConfigurationProperty -PSPath "IIS:\Sites\Default Web Site" -Filter "system.webServer/httpProtocol/customHeaders" -Name "." -Value @{name='X-Frame-Options';value='SAMEORIGIN'} -ErrorAction SilentlyContinue
-    Add-WebConfigurationProperty -PSPath "IIS:\Sites\Default Web Site" -Filter "system.webServer/httpProtocol/customHeaders" -Name "." -Value @{name='X-Content-Type-Options';value='nosniff'} -ErrorAction SilentlyContinue
-    Add-WebConfigurationProperty -PSPath "IIS:\Sites\Default Web Site" -Filter "system.webServer/security/requestFiltering/verbs" -Name "." -Value @{verb='TRACE';allowed='False'} -ErrorAction SilentlyContinue
-    Add-WebConfigurationProperty -PSPath "IIS:\Sites\Default Web Site" -Filter "system.webServer/security/requestFiltering/verbs" -Name "." -Value @{verb='DELETE';allowed='False'} -ErrorAction SilentlyContinue
-    
-    Restart-Service -Name W3SVC -ErrorAction SilentlyContinue
-    
-    Write-Host "[+] IIS Instalado y seguro en puerto $puerto" -ForegroundColor Green
+# Validar que se corra como Administrador
+if (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-Warning "[!] Cierra esta ventana y abre PowerShell como Administrador."
+    Start-Sleep -Seconds 4
+    exit
 }
 
+# --- FUNCIONES DE IIS ---
+Function Instalar-IIS {
+    Write-Host "`n[*] Instalando IIS (Esto puede tardar un poco)..." -ForegroundColor Cyan
+    Install-WindowsFeature -name Web-Server -IncludeManagementTools | Out-Null
+    New-NetFirewallRule -DisplayName "HTTP-IIS" -LocalPort 80 -Protocol TCP -Action Allow -ErrorAction SilentlyContinue | Out-Null
+    Write-Host "[+] IIS instalado correctamente en el puerto 80." -ForegroundColor Green
+}
+
+Function Desinstalar-IIS {
+    Write-Host "`n[*] Desinstalando IIS..." -ForegroundColor Yellow
+    Uninstall-WindowsFeature -name Web-Server -Remove | Out-Null
+    Remove-NetFirewallRule -DisplayName "HTTP-IIS" -ErrorAction SilentlyContinue
+    Write-Host "[-] IIS desinstalado." -ForegroundColor Green
+}
+
+# --- FUNCIONES DE APACHE / NGINX ---
 Function Instalar-Opcional {
     param($Servicio)
 
     $paquete = if ($Servicio -eq "apache") { "apache-httpd" } else { "nginx" }
 
-    Write-Host "`n[*] Buscando versiones en Chocolatey..." -ForegroundColor Yellow
-    $salida = choco info $paquete --all -r | Select-String -Pattern "^$paquete"
-    if (-not $salida) {
-        Write-Host "[X] No se hallaron versiones para $Servicio." -ForegroundColor Red
-        return
-    }
-
-    $versiones = @()
-    foreach ($linea in $salida) {
-        $versiones += ($linea -split '\|')[1]
-    }
-    $versiones = $versiones | Sort-Object -Descending
-
-    Write-Host "Versiones disponibles:"
-    Write-Host "1) Latest: $($versiones[0])"
-    if ($versiones.Count -gt 1) {
-        Write-Host "2) LTS:    $($versiones[1])"
-    }
-    $op = Read-Host "Elige opcion [1/2] (o Enter para Latest)"
-    if ([string]::IsNullOrWhiteSpace($op) -or $op -eq "1") {
-        $ver = $versiones[0]
+    Write-Host "`n[*] Preparando instalacion de $Servicio..." -ForegroundColor Yellow
+    Write-Host "1) Instalar la version mas reciente (Recomendado)"
+    Write-Host "2) Escribir una version manual (ej. 2.4.57)"
+    $op = Read-Host "Elige una opcion [1/2] (Enter para mas reciente)"
+    
+    if ($op -eq "2") {
+        $ver = Read-Host "Escribe la version exacta"
     } else {
-        $ver = $versiones[1]
+        $ver = "Latest"
     }
 
     $puerto = Read-Host "Ingresa puerto para $Servicio (ej. 8080)"
     if ([string]::IsNullOrWhiteSpace($puerto)) { $puerto = 8080 }
 
+    # Verificar si el puerto ya se está usando
     $ocupado = Test-NetConnection -ComputerName localhost -Port $puerto -WarningAction SilentlyContinue
     if ($ocupado.TcpTestSucceeded) {
-        Write-Host "[X] El puerto $puerto ya esta en uso." -ForegroundColor Red
+        Write-Host "[X] El puerto $puerto ya esta en uso. Intenta con otro." -ForegroundColor Red
         return
     }
 
-    Write-Host "[*] Instalando $Servicio v$ver silenciosamente..." -ForegroundColor Cyan
-    choco install $paquete --version $ver -y --force | Out-Null
+    Write-Host "[*] Descargando e instalando $Servicio desde Chocolatey..." -ForegroundColor Cyan
+    
+    # Instalacion forzada sin busqueda previa para evitar el bloqueo
+    if ($ver -eq "Latest") {
+        choco install $paquete -y --force | Out-Null
+    } else {
+        choco install $paquete --version $ver -y --force | Out-Null
+    }
 
+    Write-Host "[*] Configurando puertos y archivos..." -ForegroundColor Yellow
+    
     if ($Servicio -eq "nginx") {
         $conf = "C:\tools\nginx\conf\nginx.conf"
-        (Get-Content $conf) -replace "listen\s+80;", "listen       $puerto;" | Set-Content $conf
-        "Servidor: Nginx - Version: $ver - Puerto: $puerto" | Out-File "C:\tools\nginx\html\index.html"
-        Start-Process "C:\tools\nginx\nginx.exe" -WorkingDirectory "C:\tools\nginx" -NoNewWindow
+        if (Test-Path $conf) {
+            (Get-Content $conf) -replace "listen\s+80;", "listen       $puerto;" | Set-Content $conf
+            "Servidor: Nginx - Version: $ver - Puerto: $puerto" | Out-File "C:\tools\nginx\html\index.html"
+            Start-Process "C:\tools\nginx\nginx.exe" -WorkingDirectory "C:\tools\nginx"
+        } else {
+            Write-Host "[X] Error: Nginx no se configuro correctamente. Revisa tu conexion a internet." -ForegroundColor Red
+            return
+        }
     }
 
     if ($Servicio -eq "apache") {
         $conf = "C:\tools\apache24\conf\httpd.conf"
-        (Get-Content $conf) -replace "Listen 80", "Listen $puerto" | Set-Content $conf
-        (Get-Content $conf) -replace "ServerTokens Full", "ServerTokens Prod" | Set-Content $conf
-        (Get-Content $conf) -replace "ServerSignature On", "ServerSignature Off" | Set-Content $conf
-        "Servidor: Apache - Version: $ver - Puerto: $puerto" | Out-File "C:\tools\apache24\htdocs\index.html"
-        Restart-Service -Name "Apache2.4" -ErrorAction SilentlyContinue
+        if (Test-Path $conf) {
+            (Get-Content $conf) -replace "Listen 80", "Listen $puerto" | Set-Content $conf
+            (Get-Content $conf) -replace "ServerTokens Full", "ServerTokens Prod" | Set-Content $conf
+            (Get-Content $conf) -replace "ServerSignature On", "ServerSignature Off" | Set-Content $conf
+            "Servidor: Apache - Version: $ver - Puerto: $puerto" | Out-File "C:\tools\apache24\htdocs\index.html"
+            Restart-Service -Name "Apache2.4" -ErrorAction SilentlyContinue
+        } else {
+            Write-Host "[X] Error: Apache no se configuro correctamente. Revisa tu conexion a internet." -ForegroundColor Red
+            return
+        }
     }
 
     New-NetFirewallRule -DisplayName "HTTP-$Servicio" -LocalPort $puerto -Protocol TCP -Action Allow -ErrorAction SilentlyContinue | Out-Null
-    Write-Host "[+] $Servicio instalado en el puerto $puerto" -ForegroundColor Green
+    Write-Host "[+] $Servicio instalado correctamente en el puerto $puerto." -ForegroundColor Green
 }
 
-Function Desinstalar-Servicio {
+Function Desinstalar-Opcional {
     param($Servicio)
-    Write-Host "`n[*] Desinstalando $Servicio..." -ForegroundColor Yellow
+    
+    $paquete = if ($Servicio -eq "apache") { "apache-httpd" } else { "nginx" }
+    
+    Write-Host "`n[*] Deteniendo y desinstalando $Servicio..." -ForegroundColor Yellow
+    
+    if ($Servicio -eq "nginx") {
+        Stop-Process -Name "nginx" -ErrorAction SilentlyContinue
+    }
+    if ($Servicio -eq "apache") {
+        Stop-Service -Name "Apache2.4" -ErrorAction SilentlyContinue
+    }
 
-    if ($Servicio -eq "iis") {
-        Stop-Service -Name W3SVC -ErrorAction SilentlyContinue
-        Uninstall-WindowsFeature -Name Web-Server -IncludeManagementTools | Out-Null
-        Remove-Item "C:\inetpub" -Recurse -Force -ErrorAction SilentlyContinue
-        Remove-NetFirewallRule -DisplayName "HTTP-IIS-Custom" -ErrorAction SilentlyContinue
-        Write-Host "[+] IIS desinstalado correctamente." -ForegroundColor Green
+    choco uninstall $paquete -y | Out-Null
+    Remove-NetFirewallRule -DisplayName "HTTP-$Servicio" -ErrorAction SilentlyContinue
+    
+    # Limpiar las carpetas que deja Chocolatey para que no haya broncas si reinstalas
+    if ($Servicio -eq "apache" -and (Test-Path "C:\tools\apache24")) { 
+        Remove-Item "C:\tools\apache24" -Recurse -Force -ErrorAction SilentlyContinue 
     }
-    elseif ($Servicio -eq "apache") {
-        Stop-Service -Name Apache2.4 -ErrorAction SilentlyContinue
-        choco uninstall apache-httpd -y --force | Out-Null
-        Remove-Item "C:\tools\apache24" -Recurse -Force -ErrorAction SilentlyContinue
-        Remove-NetFirewallRule -DisplayName "HTTP-apache" -ErrorAction SilentlyContinue
-        Write-Host "[+] Apache desinstalado correctamente." -ForegroundColor Green
+    if ($Servicio -eq "nginx" -and (Test-Path "C:\tools\nginx")) { 
+        Remove-Item "C:\tools\nginx" -Recurse -Force -ErrorAction SilentlyContinue 
     }
-    elseif ($Servicio -eq "nginx") {
-        Stop-Process -Name nginx -Force -ErrorAction SilentlyContinue
-        choco uninstall nginx -y --force | Out-Null
-        Remove-Item "C:\tools\nginx" -Recurse -Force -ErrorAction SilentlyContinue
-        Remove-NetFirewallRule -DisplayName "HTTP-nginx" -ErrorAction SilentlyContinue
-        Write-Host "[+] Nginx desinstalado correctamente." -ForegroundColor Green
-    }
+
+    Write-Host "[-] $Servicio desinstalado y limpio." -ForegroundColor Green
 }
 
-if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
-    Write-Host "[!] Chocolatey no esta instalado. Instalando..." -ForegroundColor Yellow
-    Set-ExecutionPolicy Bypass -Scope Process -Force
-    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-    iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-}
-
-while ($true) {
+# --- MENU PRINCIPAL ---
+do {
     Write-Host "`n======= MENU WINDOWS =======" -ForegroundColor Cyan
     Write-Host "1) Instalar IIS (Obligatorio)"
     Write-Host "2) Instalar Apache (Opcional)"
@@ -163,15 +131,16 @@ while ($true) {
     Write-Host "6) Desinstalar Nginx"
     Write-Host "0) Salir"
     
-    $opt = Read-Host "Elige una opcion"
-    switch ($opt) {
+    $opcion = Read-Host "Elige una opcion"
+
+    switch ($opcion) {
         "1" { Instalar-IIS }
         "2" { Instalar-Opcional -Servicio "apache" }
         "3" { Instalar-Opcional -Servicio "nginx" }
-        "4" { Desinstalar-Servicio -Servicio "iis" }
-        "5" { Desinstalar-Servicio -Servicio "apache" }
-        "6" { Desinstalar-Servicio -Servicio "nginx" }
-        "0" { exit }
-        default { Write-Host "Opcion no valida." -ForegroundColor Red }
+        "4" { Desinstalar-IIS }
+        "5" { Desinstalar-Opcional -Servicio "apache" }
+        "6" { Desinstalar-Opcional -Servicio "nginx" }
+        "0" { Write-Host "Saliendo del script..."; break }
+        default { Write-Host "[X] Opcion no valida." -ForegroundColor Red }
     }
-}
+} while ($opcion -ne "0")
