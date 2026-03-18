@@ -15,8 +15,10 @@ Function Instalar-IIS {
     Write-Host "`n[*] Instalando IIS silenciosamente..." -ForegroundColor Cyan
     Install-WindowsFeature -Name Web-Server -IncludeManagementTools | Out-Null
     
+    Stop-Service -Name W3SVC, WAS -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+    
     Write-Host "[*] Configurando puerto al $puerto..." -ForegroundColor Yellow
-    # Borrar binding viejo para evitar errores de ruta y crear el nuevo correctamente
     Clear-WebConfiguration -PSPath "IIS:\Sites\Default Web Site" -Filter "system.applicationHost/sites/site/bindings/binding" -ErrorAction SilentlyContinue
     New-WebBinding -Name "Default Web Site" -Protocol http -Port $puerto -IPAddress "*" -ErrorAction SilentlyContinue
     
@@ -33,23 +35,21 @@ Function Instalar-IIS {
 
     Write-Host "[*] Aplicando seguridad (Ocultar version y bloquear metodos)..." -ForegroundColor Yellow
     
-    # Quitar cabeceras y metodos viejos silenciosamente para no generar errores de duplicado
     try { Remove-WebConfigurationProperty -PSPath "IIS:\Sites\Default Web Site" -Filter "system.webServer/httpProtocol/customHeaders" -Name "." -AtElement @{name='X-Powered-By'} -ErrorAction Stop } catch {}
     try { Remove-WebConfigurationProperty -PSPath "IIS:\Sites\Default Web Site" -Filter "system.webServer/httpProtocol/customHeaders" -Name "." -AtElement @{name='X-Frame-Options'} -ErrorAction Stop } catch {}
     try { Remove-WebConfigurationProperty -PSPath "IIS:\Sites\Default Web Site" -Filter "system.webServer/httpProtocol/customHeaders" -Name "." -AtElement @{name='X-Content-Type-Options'} -ErrorAction Stop } catch {}
     try { Remove-WebConfigurationProperty -PSPath "IIS:\Sites\Default Web Site" -Filter "system.webServer/security/requestFiltering/verbs" -Name "." -AtElement @{verb='TRACE'} -ErrorAction Stop } catch {}
     try { Remove-WebConfigurationProperty -PSPath "IIS:\Sites\Default Web Site" -Filter "system.webServer/security/requestFiltering/verbs" -Name "." -AtElement @{verb='DELETE'} -ErrorAction Stop } catch {}
 
-    # Ocultar version del servidor
     Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST/Default Web Site' -Filter "system.webServer/security/requestFiltering" -Name "removeServerHeader" -Value "True" -ErrorAction SilentlyContinue
     
-    # Agregar reglas nuevas limpias
     Add-WebConfigurationProperty -PSPath "IIS:\Sites\Default Web Site" -Filter "system.webServer/httpProtocol/customHeaders" -Name "." -Value @{name='X-Frame-Options';value='SAMEORIGIN'} -ErrorAction SilentlyContinue
     Add-WebConfigurationProperty -PSPath "IIS:\Sites\Default Web Site" -Filter "system.webServer/httpProtocol/customHeaders" -Name "." -Value @{name='X-Content-Type-Options';value='nosniff'} -ErrorAction SilentlyContinue
     Add-WebConfigurationProperty -PSPath "IIS:\Sites\Default Web Site" -Filter "system.webServer/security/requestFiltering/verbs" -Name "." -Value @{verb='TRACE';allowed='False'} -ErrorAction SilentlyContinue
     Add-WebConfigurationProperty -PSPath "IIS:\Sites\Default Web Site" -Filter "system.webServer/security/requestFiltering/verbs" -Name "." -Value @{verb='DELETE';allowed='False'} -ErrorAction SilentlyContinue
     
-    Restart-Service -Name "W3SVC"
+    Start-Service -Name W3SVC, WAS -ErrorAction SilentlyContinue
+    
     Write-Host "[+] IIS Instalado y seguro en puerto $puerto" -ForegroundColor Green
 }
 
@@ -115,7 +115,6 @@ Function Instalar-Opcional {
     Write-Host "[+] $Servicio instalado en el puerto $puerto" -ForegroundColor Green
 }
 
-# --- MENU PRINCIPAL WINDOWS ---
 if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
     Write-Host "[!] Chocolatey no esta instalado. Instalando..." -ForegroundColor Yellow
     Set-ExecutionPolicy Bypass -Scope Process -Force
