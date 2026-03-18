@@ -15,8 +15,10 @@ Function Instalar-IIS {
     Write-Host "`n[*] Instalando IIS silenciosamente..." -ForegroundColor Cyan
     Install-WindowsFeature -Name Web-Server -IncludeManagementTools | Out-Null
     
-    Write-Host "[*] Cambiando puerto al $puerto..." -ForegroundColor Yellow
-    Set-WebBinding -Name "Default Web Site" -BindingInformation "*:80:" -PropertyName "Port" -Value $puerto -ErrorAction SilentlyContinue
+    Write-Host "[*] Configurando puerto al $puerto..." -ForegroundColor Yellow
+    # Borrar binding viejo para evitar errores de ruta y crear el nuevo correctamente
+    Clear-WebConfiguration -PSPath "IIS:\Sites\Default Web Site" -Filter "system.applicationHost/sites/site/bindings/binding" -ErrorAction SilentlyContinue
+    New-WebBinding -Name "Default Web Site" -Protocol http -Port $puerto -IPAddress "*" -ErrorAction SilentlyContinue
     
     $webRoot = "C:\inetpub\wwwroot"
     Remove-Item "$webRoot\iisstart.*" -Force -ErrorAction SilentlyContinue
@@ -30,32 +32,22 @@ Function Instalar-IIS {
     New-NetFirewallRule -DisplayName "HTTP-IIS-Custom" -LocalPort $puerto -Protocol TCP -Action Allow -ErrorAction SilentlyContinue | Out-Null
 
     Write-Host "[*] Aplicando seguridad (Ocultar version y bloquear metodos)..." -ForegroundColor Yellow
-    try {
-        Remove-WebConfigurationProperty -PSPath "IIS:\Sites\Default Web Site" `
-          -Filter "system.webServer/httpProtocol/customHeaders" `
-          -Name "." -AtElement @{name='X-Powered-By'} `
-          -ErrorAction Stop
-    } catch {}
-
-    Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST/Default Web Site' `
-      -Filter "system.webServer/security/requestFiltering" `
-      -Name "removeServerHeader" -Value "True" -ErrorAction SilentlyContinue
     
-    Add-WebConfigurationProperty -PSPath "IIS:\Sites\Default Web Site" `
-      -Filter "system.webServer/httpProtocol/customHeaders" `
-      -Name "." -Value @{name='X-Frame-Options';value='SAMEORIGIN'} -ErrorAction SilentlyContinue
+    # Quitar cabeceras y metodos viejos silenciosamente para no generar errores de duplicado
+    try { Remove-WebConfigurationProperty -PSPath "IIS:\Sites\Default Web Site" -Filter "system.webServer/httpProtocol/customHeaders" -Name "." -AtElement @{name='X-Powered-By'} -ErrorAction Stop } catch {}
+    try { Remove-WebConfigurationProperty -PSPath "IIS:\Sites\Default Web Site" -Filter "system.webServer/httpProtocol/customHeaders" -Name "." -AtElement @{name='X-Frame-Options'} -ErrorAction Stop } catch {}
+    try { Remove-WebConfigurationProperty -PSPath "IIS:\Sites\Default Web Site" -Filter "system.webServer/httpProtocol/customHeaders" -Name "." -AtElement @{name='X-Content-Type-Options'} -ErrorAction Stop } catch {}
+    try { Remove-WebConfigurationProperty -PSPath "IIS:\Sites\Default Web Site" -Filter "system.webServer/security/requestFiltering/verbs" -Name "." -AtElement @{verb='TRACE'} -ErrorAction Stop } catch {}
+    try { Remove-WebConfigurationProperty -PSPath "IIS:\Sites\Default Web Site" -Filter "system.webServer/security/requestFiltering/verbs" -Name "." -AtElement @{verb='DELETE'} -ErrorAction Stop } catch {}
 
-    Add-WebConfigurationProperty -PSPath "IIS:\Sites\Default Web Site" `
-      -Filter "system.webServer/httpProtocol/customHeaders" `
-      -Name "." -Value @{name='X-Content-Type-Options';value='nosniff'} -ErrorAction SilentlyContinue
+    # Ocultar version del servidor
+    Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST/Default Web Site' -Filter "system.webServer/security/requestFiltering" -Name "removeServerHeader" -Value "True" -ErrorAction SilentlyContinue
     
-    Add-WebConfigurationProperty -PSPath "IIS:\Sites\Default Web Site" `
-      -Filter "system.webServer/security/requestFiltering/verbs" `
-      -Name "." -Value @{verb='TRACE';allowed='False'} -ErrorAction SilentlyContinue
-
-    Add-WebConfigurationProperty -PSPath "IIS:\Sites\Default Web Site" `
-      -Filter "system.webServer/security/requestFiltering/verbs" `
-      -Name "." -Value @{verb='DELETE';allowed='False'} -ErrorAction SilentlyContinue
+    # Agregar reglas nuevas limpias
+    Add-WebConfigurationProperty -PSPath "IIS:\Sites\Default Web Site" -Filter "system.webServer/httpProtocol/customHeaders" -Name "." -Value @{name='X-Frame-Options';value='SAMEORIGIN'} -ErrorAction SilentlyContinue
+    Add-WebConfigurationProperty -PSPath "IIS:\Sites\Default Web Site" -Filter "system.webServer/httpProtocol/customHeaders" -Name "." -Value @{name='X-Content-Type-Options';value='nosniff'} -ErrorAction SilentlyContinue
+    Add-WebConfigurationProperty -PSPath "IIS:\Sites\Default Web Site" -Filter "system.webServer/security/requestFiltering/verbs" -Name "." -Value @{verb='TRACE';allowed='False'} -ErrorAction SilentlyContinue
+    Add-WebConfigurationProperty -PSPath "IIS:\Sites\Default Web Site" -Filter "system.webServer/security/requestFiltering/verbs" -Name "." -Value @{verb='DELETE';allowed='False'} -ErrorAction SilentlyContinue
     
     Restart-Service -Name "W3SVC"
     Write-Host "[+] IIS Instalado y seguro en puerto $puerto" -ForegroundColor Green
