@@ -15,11 +15,17 @@ Function Instalar-IIS {
     Write-Host "`n[*] Instalando IIS silenciosamente..." -ForegroundColor Cyan
     Install-WindowsFeature -Name Web-Server -IncludeManagementTools | Out-Null
     
-    Stop-Service -Name W3SVC, WAS -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 2
-    
     Write-Host "[*] Configurando puerto al $puerto..." -ForegroundColor Yellow
-    Clear-WebConfiguration -PSPath "IIS:\Sites\Default Web Site" -Filter "system.applicationHost/sites/site/bindings/binding" -ErrorAction SilentlyContinue
+    
+    # FORMA A PRUEBA DE BLOQUEOS (HRESULT 0x80070021)
+    # 1. Quitar todos los bindings existentes uno por uno
+    $bindings = Get-WebBinding -Name "Default Web Site" -ErrorAction SilentlyContinue
+    if ($bindings) {
+        foreach ($b in $bindings) {
+            Remove-WebBinding -Name "Default Web Site" -BindingInformation $b.bindingInformation -ErrorAction SilentlyContinue
+        }
+    }
+    # 2. Agregar el nuevo binding limpio
     New-WebBinding -Name "Default Web Site" -Protocol http -Port $puerto -IPAddress "*" -ErrorAction SilentlyContinue
     
     $webRoot = "C:\inetpub\wwwroot"
@@ -35,6 +41,7 @@ Function Instalar-IIS {
 
     Write-Host "[*] Aplicando seguridad (Ocultar version y bloquear metodos)..." -ForegroundColor Yellow
     
+    # Bloques try/catch silenciosos
     try { Remove-WebConfigurationProperty -PSPath "IIS:\Sites\Default Web Site" -Filter "system.webServer/httpProtocol/customHeaders" -Name "." -AtElement @{name='X-Powered-By'} -ErrorAction Stop } catch {}
     try { Remove-WebConfigurationProperty -PSPath "IIS:\Sites\Default Web Site" -Filter "system.webServer/httpProtocol/customHeaders" -Name "." -AtElement @{name='X-Frame-Options'} -ErrorAction Stop } catch {}
     try { Remove-WebConfigurationProperty -PSPath "IIS:\Sites\Default Web Site" -Filter "system.webServer/httpProtocol/customHeaders" -Name "." -AtElement @{name='X-Content-Type-Options'} -ErrorAction Stop } catch {}
@@ -48,7 +55,7 @@ Function Instalar-IIS {
     Add-WebConfigurationProperty -PSPath "IIS:\Sites\Default Web Site" -Filter "system.webServer/security/requestFiltering/verbs" -Name "." -Value @{verb='TRACE';allowed='False'} -ErrorAction SilentlyContinue
     Add-WebConfigurationProperty -PSPath "IIS:\Sites\Default Web Site" -Filter "system.webServer/security/requestFiltering/verbs" -Name "." -Value @{verb='DELETE';allowed='False'} -ErrorAction SilentlyContinue
     
-    Start-Service -Name W3SVC, WAS -ErrorAction SilentlyContinue
+    Restart-Service -Name W3SVC -ErrorAction SilentlyContinue
     
     Write-Host "[+] IIS Instalado y seguro en puerto $puerto" -ForegroundColor Green
 }
