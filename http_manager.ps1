@@ -100,7 +100,6 @@ while (`$listener.IsListening) {
 "@
 
     Start-Process powershell.exe -ArgumentList "-WindowStyle Hidden -NoProfile -Command `"$codigoServidor`""
-    
     Write-Host "[+] Servidor Web Nativo activo en el puerto $puerto." -ForegroundColor Green
     Write-Host "[>] Abre en tu Host: http://${VM_IP}" -ForegroundColor Yellow
 }
@@ -148,7 +147,6 @@ Function Instalar-Opcional {
             $htdocs = Join-Path -Path $apacheRoot -ChildPath "htdocs"
 
             (Get-Content $conf) -replace "Listen 80", "Listen $puerto" | Set-Content $conf
-            
             (Get-Content $conf) -replace "^ServerName.*", "" | Set-Content $conf
             Add-Content -Path $conf -Value "`nServerName localhost:$puerto"
             
@@ -156,13 +154,18 @@ Function Instalar-Opcional {
             
             $apacheExe = Get-ChildItem -Path $apacheRoot -Filter "httpd.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
             if ($apacheExe) {
-                Write-Host "[*] Arrancando Apache en segundo plano (Modo SSH)..." -ForegroundColor Yellow
-                Stop-Process -Name "httpd" -Force -ErrorAction SilentlyContinue
+                Write-Host "[*] Instalando y arrancando Apache como Servicio SSH..." -ForegroundColor Yellow
+                
+                # Desinstalar cualquier rastro de apache
+                & $apacheExe.FullName -k uninstall 2>$null
                 Start-Sleep -Seconds 1
                 
-                # LA MAGIA PARA SSH: Usar un Job
-                $jobScript = { & $args[0] }
-                Start-Job -ScriptBlock $jobScript -ArgumentList $apacheExe.FullName | Out-Null
+                # Instalarlo en el sistema real
+                & $apacheExe.FullName -k install 2>$null
+                Start-Sleep -Seconds 1
+                
+                # Levantar el servicio usando comandos de red de Windows (Infalible en SSH)
+                net start Apache2.4
                 
             } else { Write-Host "[X] Error: No encontre httpd.exe" -ForegroundColor Red; return }
         } else { Write-Host "[X] Error: No se encontro httpd.conf." -ForegroundColor Red; return }
@@ -180,8 +183,10 @@ Function Desinstalar-Opcional {
     Write-Host "`n[*] Desinstalando $Servicio..." -ForegroundColor Yellow
     if ($Servicio -eq "nginx") { Stop-Process -Name "nginx" -Force -ErrorAction SilentlyContinue }
     if ($Servicio -eq "apache") { 
+        net stop Apache2.4 2>$null
+        $apacheExe = Get-ChildItem -Path "C:\tools", "C:\Apache24" -Filter "httpd.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($apacheExe) { & $apacheExe.FullName -k uninstall 2>$null }
         Stop-Process -Name "httpd" -Force -ErrorAction SilentlyContinue 
-        Get-Job | Remove-Job -Force -ErrorAction SilentlyContinue
     }
 
     choco uninstall $paquete -y | Out-Null
