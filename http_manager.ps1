@@ -122,20 +122,35 @@ Function Instalar-Opcional {
     Write-Host "[*] Instalando $Servicio ($ver) desde Chocolatey..." -ForegroundColor Cyan
     choco install $paquete -y --force | Out-Null
 
-    $rutasBusqueda = @("C:\tools", "C:\Apache24", "C:\ProgramData\chocolatey\lib\$paquete", "$env:APPDATA\Apache24", "$env:APPDATA\nginx", "$env:APPDATA")
+    # Buscamos en todas las subcarpetas de tools para que no se nos escape ni Apache ni Nginx
+    $rutasBusqueda = @("C:\tools", "C:\ProgramData\chocolatey\lib\$paquete", "$env:APPDATA")
 
     if ($Servicio -eq "nginx") {
+        # Buscar el nginx.conf sin importar en qué carpeta rara lo haya metido Choco
         $archivoConf = Get-ChildItem -Path $rutasBusqueda -Filter "nginx.conf" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+        
         if ($archivoConf) {
             $conf = $archivoConf.FullName
             $nginxRoot = $archivoConf.Directory.Parent.FullName
             $htmlDir = Join-Path -Path $nginxRoot -ChildPath "html"
 
-            (Get-Content $conf) -replace "listen\s+80;", "listen       $puerto;" | Set-Content $conf
+            # Matar cualquier nginx viejo antes de cambiar la config
+            Stop-Process -Name "nginx" -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 1
+
+            # Cambiar el puerto en el archivo (soporta varios formatos que usa nginx)
+            $textoConf = Get-Content $conf
+            $textoConf = $textoConf -replace '(?m)^\s*listen\s+\d+\s*;', "        listen       $puerto;"
+            $textoConf | Set-Content $conf
+
             Crear-Index -Ruta $htmlDir -Servicio "Nginx" -Version $ver -Puerto $puerto
             
-            $exeNginx = Join-Path -Path $nginxRoot -ChildPath "nginx.exe"
-            if (Test-Path $exeNginx) { Start-Process $exeNginx -WorkingDirectory $nginxRoot -WindowStyle Hidden }
+            # Buscar el ejecutable de nginx
+            $exeNginx = Get-ChildItem -Path $nginxRoot -Filter "nginx.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($exeNginx) {
+                Write-Host "[*] Arrancando Nginx en segundo plano..." -ForegroundColor Yellow
+                Start-Process $exeNginx.FullName -WorkingDirectory $exeNginx.Directory.FullName -WindowStyle Hidden
+            } else { Write-Host "[X] Error: Se encontro config, pero no nginx.exe." -ForegroundColor Red; return }
         } else { Write-Host "[X] Error: No se encontro nginx.conf." -ForegroundColor Red; return }
     }
 
@@ -145,28 +160,14 @@ Function Instalar-Opcional {
             $conf = $archivoConf.FullName
             $apacheRoot = $archivoConf.Directory.Parent.FullName
             
-            # Formatear la ruta al estilo de Apache (cambiar \ por /)
             $apacheRootFormat = $apacheRoot -replace "\\", "/"
             $htdocs = Join-Path -Path $apacheRoot -ChildPath "htdocs"
 
-            # ========================================================
-            # FIX DEFINITIVO: MATAR EL ERROR 1 CORRIGIENDO SRVROOT
-            # ========================================================
             $textoConf = Get-Content $conf
-            
-            # 1. Cambiar la variable global SRVROOT que usa todo el sistema de Apache
             $textoConf = $textoConf -replace 'Define SRVROOT .*', "Define SRVROOT `"$apacheRootFormat`""
-            
-            # 2. Reemplazo ciego por si quedó alguna ruta hardcodeada por defecto
             $textoConf = $textoConf -replace '(?i)c:/Apache24', $apacheRootFormat
-            
-            # 3. Asignar el puerto que elegiste
             $textoConf = $textoConf -replace '(?m)^Listen\s+\d+', "Listen $puerto"
-            
-            # 4. Forzar el ServerName quitándole el comentario (el #)
             $textoConf = $textoConf -replace '(?m)^#?\s*ServerName.*', "ServerName localhost:$puerto"
-            
-            # Reescribir el archivo completo
             $textoConf | Set-Content $conf
             
             Crear-Index -Ruta $htdocs -Servicio "Apache" -Version $ver -Puerto $puerto
@@ -175,16 +176,13 @@ Function Instalar-Opcional {
             if ($apacheExe) {
                 Write-Host "[*] Instalando y arrancando Apache como Servicio SSH..." -ForegroundColor Yellow
                 
-                # Desinstalar servicio viejo y purgar procesos colgados
                 & $apacheExe.FullName -k uninstall 2>$null
                 Stop-Process -Name "httpd" -Force -ErrorAction SilentlyContinue
                 Start-Sleep -Seconds 2
                 
-                # Instalar el servicio fresco con el httpd.conf ya curado
                 & $apacheExe.FullName -k install 2>$null
                 Start-Sleep -Seconds 2
                 
-                # Levantar el servicio
                 net start Apache2.4
                 
             } else { Write-Host "[X] Error: No encontre httpd.exe" -ForegroundColor Red; return }
@@ -204,7 +202,7 @@ Function Desinstalar-Opcional {
     if ($Servicio -eq "nginx") { Stop-Process -Name "nginx" -Force -ErrorAction SilentlyContinue }
     if ($Servicio -eq "apache") { 
         net stop Apache2.4 2>$null
-        $apacheExe = Get-ChildItem -Path "C:\tools", "C:\Apache24" -Filter "httpd.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+        $apacheExe = Get-ChildItem -Path "C:\tools" -Filter "httpd.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($apacheExe) { & $apacheExe.FullName -k uninstall 2>$null }
         Stop-Process -Name "httpd" -Force -ErrorAction SilentlyContinue 
     }
@@ -212,9 +210,11 @@ Function Desinstalar-Opcional {
     choco uninstall $paquete -y | Out-Null
     
     Get-NetFirewallRule -DisplayName "HTTP-$Servicio-*" -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
-    if (Test-Path "C:\tools\$paquete") { Remove-Item "C:\tools\$paquete" -Recurse -Force -ErrorAction SilentlyContinue }
-    if (Test-Path "C:\tools\apache24") { Remove-Item "C:\tools\apache24" -Recurse -Force -ErrorAction SilentlyContinue }
-    if (Test-Path "C:\Apache24") { Remove-Item "C:\Apache24" -Recurse -Force -ErrorAction SilentlyContinue }
+    
+    # Limpieza ruda para que no queden carpetas trabadas
+    Get-ChildItem -Path "C:\tools" -Filter "*$paquete*" -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    if ($Servicio -eq "apache") { Get-ChildItem -Path "C:\tools" -Filter "*apache24*" -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue }
+    if ($Servicio -eq "nginx") { Get-ChildItem -Path "C:\tools" -Filter "*nginx*" -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue }
 
     Write-Host "[-] $Servicio desinstalado y carpetas limpias." -ForegroundColor Green
 }
