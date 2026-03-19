@@ -120,42 +120,50 @@ Function Instalar-Opcional {
     $puerto = Solicitar-Puerto -ServicioNombre $Servicio
 
     Write-Host "[*] Instalando $Servicio ($ver) desde Chocolatey..." -ForegroundColor Cyan
-    choco install $paquete -y --force | Out-Null
+    # Le quitamos el Out-Null para que veas si Choco tira error en letras rojas
+    choco install $paquete -y --force
+    
+    Write-Host "[*] Dando tiempo al sistema para desempaquetar archivos..." -ForegroundColor Yellow
+    Start-Sleep -Seconds 3
 
-    # Buscamos en todas las subcarpetas de tools para que no se nos escape ni Apache ni Nginx
-    $rutasBusqueda = @("C:\tools", "C:\ProgramData\chocolatey\lib\$paquete", "$env:APPDATA")
+    # Busqueda blindada, revisando carpeta por carpeta
+    $archivoConf = $null
+    $rutasBusqueda = @("C:\tools", "C:\ProgramData\chocolatey\lib", "C:\nginx")
+    
+    foreach ($ruta in $rutasBusqueda) {
+        if (Test-Path $ruta) {
+            $resultado = Get-ChildItem -Path $ruta -Filter "$($Servicio -eq 'apache' ? 'httpd.conf' : 'nginx.conf')" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($resultado) {
+                $archivoConf = $resultado
+                break
+            }
+        }
+    }
 
     if ($Servicio -eq "nginx") {
-        # Buscar el nginx.conf sin importar en qué carpeta rara lo haya metido Choco
-        $archivoConf = Get-ChildItem -Path $rutasBusqueda -Filter "nginx.conf" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-        
         if ($archivoConf) {
             $conf = $archivoConf.FullName
             $nginxRoot = $archivoConf.Directory.Parent.FullName
             $htmlDir = Join-Path -Path $nginxRoot -ChildPath "html"
 
-            # Matar cualquier nginx viejo antes de cambiar la config
             Stop-Process -Name "nginx" -Force -ErrorAction SilentlyContinue
             Start-Sleep -Seconds 1
 
-            # Cambiar el puerto en el archivo (soporta varios formatos que usa nginx)
             $textoConf = Get-Content $conf
             $textoConf = $textoConf -replace '(?m)^\s*listen\s+\d+\s*;', "        listen       $puerto;"
             $textoConf | Set-Content $conf
 
             Crear-Index -Ruta $htmlDir -Servicio "Nginx" -Version $ver -Puerto $puerto
             
-            # Buscar el ejecutable de nginx
             $exeNginx = Get-ChildItem -Path $nginxRoot -Filter "nginx.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
             if ($exeNginx) {
                 Write-Host "[*] Arrancando Nginx en segundo plano..." -ForegroundColor Yellow
                 Start-Process $exeNginx.FullName -WorkingDirectory $exeNginx.Directory.FullName -WindowStyle Hidden
             } else { Write-Host "[X] Error: Se encontro config, pero no nginx.exe." -ForegroundColor Red; return }
-        } else { Write-Host "[X] Error: No se encontro nginx.conf." -ForegroundColor Red; return }
+        } else { Write-Host "[X] Error: No se encontro nginx.conf. Revisa si Chocolatey lanzo algun error arriba." -ForegroundColor Red; return }
     }
 
     if ($Servicio -eq "apache") {
-        $archivoConf = Get-ChildItem -Path $rutasBusqueda -Filter "httpd.conf" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($archivoConf) {
             $conf = $archivoConf.FullName
             $apacheRoot = $archivoConf.Directory.Parent.FullName
@@ -211,7 +219,6 @@ Function Desinstalar-Opcional {
     
     Get-NetFirewallRule -DisplayName "HTTP-$Servicio-*" -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
     
-    # Limpieza ruda para que no queden carpetas trabadas
     Get-ChildItem -Path "C:\tools" -Filter "*$paquete*" -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     if ($Servicio -eq "apache") { Get-ChildItem -Path "C:\tools" -Filter "*apache24*" -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue }
     if ($Servicio -eq "nginx") { Get-ChildItem -Path "C:\tools" -Filter "*nginx*" -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue }
