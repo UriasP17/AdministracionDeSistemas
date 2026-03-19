@@ -184,21 +184,28 @@ Function Instalar-Opcional {
     $ver = "Latest"
     $puerto = Solicitar-Puerto -ServicioNombre $Servicio
 
-    Write-Host "[*] Descargando paquetes ($ver)..." -ForegroundColor Cyan
+    Write-Host "[*] Descargando paquetes y desempaquetando (esto tomara unos segundos)..." -ForegroundColor Cyan
     
     if ($Servicio -eq "nginx") {
         choco install $paquete -y --force --package-parameters "/port:$puerto" | Out-Null
     } else {
+        # Instalar apache de forma limpia
         choco install $paquete -y --force | Out-Null
     }
     
-    Start-Sleep -Seconds 3
+    # ======= FIX: DAR MAS TIEMPO PARA QUE DESCOMPRIMA =======
+    Write-Host "[*] Esperando a que el sistema extraiga los archivos..." -ForegroundColor Yellow
+    Start-Sleep -Seconds 8
 
     $archivoConf = $null
-    $rutasBusqueda = @("C:\tools", "C:\ProgramData\chocolatey\lib", "C:\nginx")
+    
+    # ======= FIX: BUSQUEDA RECURSIVA MAS AMPLIA =======
+    Write-Host "[*] Buscando configuracion de $Servicio..." -ForegroundColor Cyan
+    $rutasBusqueda = @("C:\tools", "C:\ProgramData\chocolatey\lib", "C:\nginx", "C:\Apache24")
     
     foreach ($ruta in $rutasBusqueda) {
         if (Test-Path $ruta) {
+            # Buscamos en todas las subcarpetas sin importar qué nombre raro les ponga choco
             $resultado = Get-ChildItem -Path $ruta -Filter $nombreArchivo -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
             if ($resultado) {
                 $archivoConf = $resultado
@@ -226,7 +233,7 @@ Function Instalar-Opcional {
             if ($exeNginx) {
                 Start-Process $exeNginx.FullName -WorkingDirectory $exeNginx.Directory.FullName -WindowStyle Hidden
             } else { Write-Host "[-] Error: nginx.exe no encontrado." -ForegroundColor Red; return }
-        } else { Write-Host "[-] Error: nginx.conf no encontrado." -ForegroundColor Red; return }
+        } else { Write-Host "[-] Error: nginx.conf no encontrado. Revisa que choco haya instalado bien." -ForegroundColor Red; return }
     }
 
     if ($Servicio -eq "apache") {
@@ -237,6 +244,7 @@ Function Instalar-Opcional {
             $apacheRootFormat = $apacheRoot -replace "\\", "/"
             $htdocs = Join-Path -Path $apacheRoot -ChildPath "htdocs"
 
+            Write-Host "[*] Inyectando configuracion en Apache..." -ForegroundColor Cyan
             $textoConf = Get-Content $conf
             $textoConf = $textoConf -replace 'Define SRVROOT .*', "Define SRVROOT `"$apacheRootFormat`""
             $textoConf = $textoConf -replace '(?i)c:/Apache24', $apacheRootFormat
@@ -252,19 +260,21 @@ Function Instalar-Opcional {
                 Get-Process -Name "httpd" -ErrorAction SilentlyContinue | Stop-Process -Force
                 Start-Sleep -Seconds 2
                 
+                Write-Host "[*] Iniciando servicio Apache..." -ForegroundColor Cyan
                 & $apacheExe.FullName -k install 2>$null
                 Start-Sleep -Seconds 2
                 
                 net start Apache2.4 | Out-Null
                 
             } else { Write-Host "[-] Error: httpd.exe no encontrado." -ForegroundColor Red; return }
-        } else { Write-Host "[-] Error: httpd.conf no encontrado." -ForegroundColor Red; return }
+        } else { Write-Host "[-] Error: httpd.conf no encontrado. Intenta darle a la opcion 5 (Desinstalar) y vuelve a instalar." -ForegroundColor Red; return }
     }
 
     Configurar-Firewall -Puerto $puerto -Nombre $Servicio
     Write-Host "[+] $Servicio instalado correctamente en puerto $puerto." -ForegroundColor Green
     Write-Host "[>] URL: http://${VM_IP}:${puerto}" -ForegroundColor Yellow
 }
+
 
 Function Desinstalar-Opcional {
     param($Servicio)
