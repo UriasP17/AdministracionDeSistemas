@@ -114,13 +114,13 @@ Function Desinstalar-IIS {
 Function Instalar-Opcional {
     param($Servicio)
     $paquete = if ($Servicio -eq "apache") { "apache-httpd" } else { "nginx" }
+    $nombreArchivo = if ($Servicio -eq "apache") { "httpd.conf" } else { "nginx.conf" }
 
     Write-Host "`n[*] Preparando instalacion de $Servicio..." -ForegroundColor Yellow
     $ver = "Latest"
     $puerto = Solicitar-Puerto -ServicioNombre $Servicio
 
     Write-Host "[*] Instalando $Servicio ($ver) desde Chocolatey..." -ForegroundColor Cyan
-    # Le quitamos el Out-Null para que veas si Choco tira error en letras rojas
     choco install $paquete -y --force
     
     Write-Host "[*] Dando tiempo al sistema para desempaquetar archivos..." -ForegroundColor Yellow
@@ -132,7 +132,7 @@ Function Instalar-Opcional {
     
     foreach ($ruta in $rutasBusqueda) {
         if (Test-Path $ruta) {
-            $resultado = Get-ChildItem -Path $ruta -Filter "$($Servicio -eq 'apache' ? 'httpd.conf' : 'nginx.conf')" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            $resultado = Get-ChildItem -Path $ruta -Filter $nombreArchivo -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
             if ($resultado) {
                 $archivoConf = $resultado
                 break
