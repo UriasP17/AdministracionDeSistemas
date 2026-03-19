@@ -6,7 +6,6 @@ $FTP_ROOT = "C:\inetpub\ftproot"
 $FTP_ANON = "C:\inetpub\ftpanon"
 $GRUPOS = @("reprobados", "recursadores")
 
-# --- FUNCIONES DE INTERFAZ MINIMALISTA ---
 function Escribir-Titulo { 
     param([string]$texto)
     Write-Host "`n--- $texto ---" -ForegroundColor Cyan
@@ -27,7 +26,6 @@ function Escribir-Info {
     Write-Host "[*] $texto" -ForegroundColor Yellow
 }
 
-# --- FUNCIONES CORE DEL FTP ---
 function Desactivar-ComplejidadPassword {
     $outfile = "$Env:TEMP\secpol.cfg"
     secedit /export /cfg $outfile /quiet
@@ -224,7 +222,6 @@ function Crear-Estructura-Base {
     cmd /c "mklink /J `"$anonJunction`" `"$FTP_ROOT\general`"" | Out-Null
 }
 
-# --- OPCIONES DEL MENU ---
 function Opcion-Instalar-FTP {
     Escribir-Titulo "Instalar y configurar servidor FTP"
     Escribir-Info "Instalando componentes IIS mediante DISM (Bypass error 0x800f081f)..."
@@ -251,7 +248,7 @@ function Opcion-Instalar-FTP {
     }
     
     if (-not (Test-Path "IIS:\")) {
-        Escribir-ErrorMsg "El modulo WebAdministration no se cargo correctamente. Intenta reiniciar la sesion SSH y vuelve a correr el script."
+        Escribir-ErrorMsg "El modulo WebAdministration no se cargo correctamente. Intenta reiniciar la sesion SSH."
         return
     }
 
@@ -433,4 +430,60 @@ function Opcion-Eliminar-Usuario {
     }
 }
 
-function
+function Opcion-Ver-Usuarios {
+    Escribir-Titulo "Usuarios Registrados"
+    $usuariosEncontrados = @()
+
+    foreach ($grupo in $GRUPOS) {
+        $miembros = Get-LocalGroupMember -Group $grupo -ErrorAction SilentlyContinue
+        foreach ($miembro in $miembros) {
+            $usuariosEncontrados += [PSCustomObject]@{
+                Usuario = $miembro.Name.Split('\')[-1]
+                Grupo   = $grupo
+            }
+        }
+    }
+
+    if ($usuariosEncontrados.Count -eq 0) {
+        Escribir-Info "No hay usuarios."
+    } else {
+        foreach ($u in ($usuariosEncontrados | Sort-Object Usuario)) {
+            $linea = "- $($u.Usuario) ($($u.Grupo))"
+            if ($u.Grupo -eq "reprobados") { Write-Host $linea -ForegroundColor Red } 
+            else { Write-Host $linea -ForegroundColor Yellow }
+        }
+    }
+}
+
+function Menu-Principal {
+    while ($true) {
+        Clear-Host
+        Write-Host "`n==============================" -ForegroundColor Cyan
+        Write-Host " ADMINISTRADOR FTP (IIS)" -ForegroundColor White
+        Write-Host "==============================" -ForegroundColor Cyan
+        Write-Host " [1] Instalar y configurar" 
+        Write-Host " [2] Agregar usuarios" 
+        Write-Host " [3] Reasignar grupo" 
+        Write-Host " [4] Borrar usuario" 
+        Write-Host " [5] Ver usuarios" 
+        Write-Host " [0] Salir" -ForegroundColor DarkGray
+        Write-Host "------------------------------" -ForegroundColor Cyan
+        
+        $opt = Read-Host "Opcion"
+
+        switch ($opt) {
+            "1" { Opcion-Instalar-FTP }
+            "2" { Opcion-Crear-Usuarios }
+            "3" { Opcion-Cambiar-Grupo }
+            "4" { Opcion-Eliminar-Usuario }
+            "5" { Opcion-Ver-Usuarios }
+            "0" { exit }
+            default { Escribir-ErrorMsg "Opcion no valida." }
+        }
+        
+        Write-Host ""
+        $null = Read-Host "Presiona ENTER para continuar"
+    }
+}
+
+Menu-Principal
