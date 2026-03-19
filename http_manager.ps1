@@ -79,14 +79,27 @@ function Configurar-Firewall {
 
 Function Instalar-IIS {
     $puerto = 80
-    Write-Host "`n[*] Instalando IIS (Esto puede tardar)..." -ForegroundColor Cyan
-    Install-WindowsFeature -name Web-Server -IncludeManagementTools | Out-Null
+    Write-Host "`n[*] Verificando instalacion de IIS..." -ForegroundColor Cyan
+    
+    # Verificamos si ya esta instalado antes de intentar instalar
+    $iisCheck = Get-WindowsFeature -Name Web-Server -ErrorAction SilentlyContinue
+    
+    if ($iisCheck.InstallState -ne "Installed") {
+        Write-Host "[*] Instalando IIS (Esto puede tardar)..." -ForegroundColor Yellow
+        # Le quitamos el -IncludeManagementTools para que no falle por falta de disco
+        Install-WindowsFeature -name Web-Server | Out-Null
+    } else {
+        Write-Host "[*] IIS ya estaba instalado, configurando archivos..." -ForegroundColor DarkGray
+    }
     
     $webRoot = "C:\inetpub\wwwroot"
     Crear-Index -Ruta $webRoot -Servicio "IIS" -Version "Nativo Windows" -Puerto $puerto
     Configurar-Firewall -Puerto $puerto -Nombre "IIS"
     
-    Write-Host "[+] IIS instalado en el puerto $puerto." -ForegroundColor Green
+    # Prender IIS por si las dudas
+    Start-Service -Name W3SVC -ErrorAction SilentlyContinue
+    
+    Write-Host "[+] IIS configurado y activo en el puerto $puerto." -ForegroundColor Green
     Write-Host "[>] Abre en tu Host: http://${VM_IP}" -ForegroundColor Yellow
 }
 
@@ -102,7 +115,7 @@ Function Instalar-Opcional {
     $paquete = if ($Servicio -eq "apache") { "apache-httpd" } else { "nginx" }
 
     Write-Host "`n[*] Preparando instalacion de $Servicio..." -ForegroundColor Yellow
-    $ver = "Latest" # Forzamos Latest para no pelear con Chocolatey
+    $ver = "Latest"
 
     $puerto = Solicitar-Puerto -ServicioNombre $Servicio
 
@@ -135,13 +148,9 @@ Function Instalar-Opcional {
             $htdocs = Join-Path -Path $apacheRoot -ChildPath "htdocs"
 
             (Get-Content $conf) -replace "Listen 80", "Listen $puerto" | Set-Content $conf
-            
-            # EL TRUCO MAESTRO: Agregar ServerName para que arranque y no muera en el intento
             Add-Content -Path $conf -Value "`nServerName localhost:$puerto"
             
             Crear-Index -Ruta $htdocs -Servicio "Apache" -Version $ver -Puerto $puerto
-            
-            # Prender servicio a la fuerza
             Start-Service -Name "Apache*" -ErrorAction SilentlyContinue
         } else { Write-Host "[X] Error: No se encontro httpd.conf." -ForegroundColor Red; return }
     }
@@ -161,7 +170,6 @@ Function Desinstalar-Opcional {
 
     choco uninstall $paquete -y | Out-Null
     
-    # Limpieza profunda
     Get-NetFirewallRule -DisplayName "HTTP-$Servicio-*" -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
     if (Test-Path "C:\tools\$paquete") { Remove-Item "C:\tools\$paquete" -Recurse -Force -ErrorAction SilentlyContinue }
     if (Test-Path "C:\tools\apache24") { Remove-Item "C:\tools\apache24" -Recurse -Force -ErrorAction SilentlyContinue }
