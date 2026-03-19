@@ -4,30 +4,33 @@
 
 $VM_IP = "192.168.56.10" # Tu IP de VirtualBox
 
+# Validar Administrador
 if (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Write-Warning "[!] Ejecuta PowerShell como Administrador."
     Start-Sleep -Seconds 4
     exit
 }
 
+# --- UTILIDADES IMPORTADAS ---
+
 function Solicitar-Puerto {
     param([string]$ServicioNombre)
     $PUERTOS_RESERVADOS = @(20,21,22,23,25,53,110,143,445,3306,3389,5432)
-
+    
     while ($true) {
         $input_p = Read-Host "Ingresa puerto para $ServicioNombre (ej. 8080, 81)"
         if ([string]::IsNullOrWhiteSpace($input_p)) { return 8080 }
         
-        # Validacion arreglada (sin diagonales duplicadas)
+        # Validacion limpia de puros numeros
         if ($input_p -notmatch '^\d+$') { Write-Host "[!] Solo numeros." -ForegroundColor Red; continue }
         
         $p = [int]$input_p
-
+        
         if ($PUERTOS_RESERVADOS -contains $p) {
-            Write-Host "[!] Puerto $p esta reservado. Elige otro." -ForegroundColor Red
+            Write-Host "[!] Puerto $p esta reservado por el sistema. Elige otro." -ForegroundColor Red
             continue
         }
-
+        
         $ocupado = Test-NetConnection -ComputerName localhost -Port $p -WarningAction SilentlyContinue
         if ($ocupado.TcpTestSucceeded) {
             Write-Host "[!] El puerto $p ya esta en uso. Intenta con otro." -ForegroundColor Red
@@ -40,32 +43,32 @@ function Solicitar-Puerto {
 function Crear-Index {
     param([string]$Ruta, [string]$Servicio, [string]$Version, [int]$Puerto)
     if (!(Test-Path $Ruta)) { New-Item -Path $Ruta -ItemType Directory -Force | Out-Null }
-
+    
     $html = @"
 <!DOCTYPE html>
 <html lang="es">
 <head>
-<meta charset="UTF-8">
-<title>$Servicio - Puerto $Puerto</title>
-<style>
-body { font-family: Arial, sans-serif; background-color: #f4f4f9; color: #333; text-align: center; padding: 50px; }
-.container { background: white; padding: 30px; border-radius: 10px; box-shadow: 0px 0px 10px rgba(0,0,0,0.1); display: inline-block; }
-h1 { color: #0078D7; }
-</style>
+  <meta charset="UTF-8">
+  <title>$Servicio - Puerto $Puerto</title>
+  <style>
+    body { font-family: Arial, sans-serif; background-color: #f4f4f9; color: #333; text-align: center; padding: 50px; }
+    .container { background: white; padding: 30px; border-radius: 10px; box-shadow: 0px 0px 10px rgba(0,0,0,0.1); display: inline-block; }
+    h1 { color: #0078D7; }
+  </style>
 </head>
 <body>
-<div class="container">
-<h1>¡Servidor Activo!</h1>
-<p><strong>Servidor:</strong> $Servicio</p>
-<p><strong>Version:</strong> $Version</p>
-<p><strong>Puerto:</strong> $Puerto</p>
-<p><strong>IP VirtualBox:</strong> $VM_IP</p>
-<p>URL: http://${VM_IP}:${Puerto}</p>
-</div>
+  <div class="container">
+      <h1>¡Servidor Activo!</h1>
+      <p><strong>Servidor:</strong> $Servicio</p>
+      <p><strong>Version:</strong> $Version</p>
+      <p><strong>Puerto:</strong> $Puerto</p>
+      <p><strong>IP VirtualBox:</strong> $VM_IP</p>
+      <p>URL: http://${VM_IP}:${Puerto}</p>
+  </div>
 </body>
 </html>
 "@
-    # Guardar sin problemas de acentos y sin diagonales dobles
+    # Guardar en UTF-8 limpio sin la 'A' rara
     [IO.File]::WriteAllText("$Ruta\index.html", $html)
 }
 
@@ -76,14 +79,16 @@ function Configurar-Firewall {
     New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Protocol TCP -LocalPort $Puerto -Action Allow -Profile Any -ErrorAction SilentlyContinue | Out-Null
 }
 
+# --- FUNCIONES DE SERVIDORES ---
+
 Function Instalar-IIS {
     $puerto = 80
     Write-Host "`n[*] Configurando servidor HTTP Nativo de Windows..." -ForegroundColor Cyan
-
+    
     $webRoot = "C:\inetpub\wwwroot\mi_sitio"
     Crear-Index -Ruta $webRoot -Servicio "Windows HTTP Nativo" -Version "System.Net" -Puerto $puerto
     Configurar-Firewall -Puerto $puerto -Nombre "HTTP-Nativo"
-
+    
     $codigoServidor = @"
 try {
 `$listener = New-Object System.Net.HttpListener
@@ -101,13 +106,16 @@ while (`$listener.IsListening) {
 } catch { exit }
 "@
 
+    # Lanzar el servidor en segundo plano de forma silenciosa sin matar nada
     Start-Process powershell.exe -ArgumentList "-WindowStyle Hidden -NoProfile -Command `"$codigoServidor`""
+    
     Write-Host "[+] Servidor Web Nativo activo en el puerto $puerto." -ForegroundColor Green
     Write-Host "[>] Abre en tu Host: http://${VM_IP}" -ForegroundColor Yellow
 }
 
 Function Desinstalar-IIS {
     Write-Host "`n[*] Desinstalando IIS..." -ForegroundColor Yellow
+    # Matar el proceso de powershell oculto
     Stop-Process -Name "powershell" -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -eq "" }
     Remove-NetFirewallRule -DisplayName "HTTP-HTTP-Nativo-80" -ErrorAction SilentlyContinue
     Write-Host "[-] Sitio HTTP Nativo apagado." -ForegroundColor Green
@@ -119,11 +127,13 @@ Function Instalar-Opcional {
 
     Write-Host "`n[*] Preparando instalacion de $Servicio..." -ForegroundColor Yellow
     $ver = "Latest"
+
     $puerto = Solicitar-Puerto -ServicioNombre $Servicio
 
     Write-Host "[*] Instalando $Servicio ($ver) desde Chocolatey..." -ForegroundColor Cyan
     choco install $paquete -y --force | Out-Null
 
+    Write-Host "[*] Configurando puertos y arrancando servicio..." -ForegroundColor Yellow
     $rutasBusqueda = @("C:\tools", "C:\Apache24", "C:\ProgramData\chocolatey\lib\$paquete", "$env:APPDATA\Apache24", "$env:APPDATA\nginx", "$env:APPDATA")
 
     if ($Servicio -eq "nginx") {
@@ -141,7 +151,7 @@ Function Instalar-Opcional {
         } else { Write-Host "[X] Error: No se encontro nginx.conf." -ForegroundColor Red; return }
     }
 
-        if ($Servicio -eq "apache") {
+    if ($Servicio -eq "apache") {
         $archivoConf = Get-ChildItem -Path $rutasBusqueda -Filter "httpd.conf" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($archivoConf) {
             $conf = $archivoConf.FullName
@@ -150,7 +160,7 @@ Function Instalar-Opcional {
 
             (Get-Content $conf) -replace "Listen 80", "Listen $puerto" | Set-Content $conf
             
-            # Limpiar ServerName para que no haya duplicados y poner el nuevo
+            # Limpiar ServerName viejo y poner el nuevo
             (Get-Content $conf) -replace "^ServerName.*", "" | Set-Content $conf
             Add-Content -Path $conf -Value "`nServerName localhost:$puerto"
             
@@ -159,18 +169,22 @@ Function Instalar-Opcional {
             $apacheExe = Get-ChildItem -Path $apacheRoot -Filter "httpd.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
             if ($apacheExe) {
                 Write-Host "[*] Arrancando Apache en ventana nueva..." -ForegroundColor Yellow
-                # Mata cualquier proceso viejo
+                # Mata servicios viejos
                 Stop-Process -Name "httpd" -Force -ErrorAction SilentlyContinue
                 Start-Sleep -Seconds 1
                 
-                # Abre Apache en una ventana NUEVA y VISIBLE (para que Windows no lo mate)
+                # LA MAGIA: Abre Apache en ventana normal
                 Start-Process -FilePath $apacheExe.FullName -WorkingDirectory $apacheRoot -WindowStyle Normal
                 
-                Write-Host "[!] IMPORTANTE: Se abrio una ventana negra de Apache. DEJALA ABIERTA, si la cierras el servidor se apaga." -ForegroundColor Cyan
+                Write-Host "[!] IMPORTANTE: Se abrio una ventana negra de Apache en tu VirtualBox. DEJALA ABIERTA." -ForegroundColor Cyan
             } else { Write-Host "[X] Error: No encontre httpd.exe" -ForegroundColor Red; return }
         } else { Write-Host "[X] Error: No se encontro httpd.conf." -ForegroundColor Red; return }
     }
 
+    Configurar-Firewall -Puerto $puerto -Nombre $Servicio
+    Write-Host "[+] $Servicio instalado correctamente." -ForegroundColor Green
+    Write-Host "[>] Abre en tu Host: http://${VM_IP}:${puerto}" -ForegroundColor Yellow
+}
 
 Function Desinstalar-Opcional {
     param($Servicio)
@@ -179,8 +193,6 @@ Function Desinstalar-Opcional {
     Write-Host "`n[*] Desinstalando $Servicio..." -ForegroundColor Yellow
     if ($Servicio -eq "nginx") { Stop-Process -Name "nginx" -Force -ErrorAction SilentlyContinue }
     if ($Servicio -eq "apache") { 
-        $apacheExe = Get-ChildItem -Path "C:\tools", "C:\Apache24" -Filter "httpd.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($apacheExe) { & $apacheExe.FullName -k stop 2>$null; & $apacheExe.FullName -k uninstall 2>$null }
         Stop-Process -Name "httpd" -Force -ErrorAction SilentlyContinue 
     }
 
@@ -194,6 +206,7 @@ Function Desinstalar-Opcional {
     Write-Host "[-] $Servicio desinstalado y carpetas limpias." -ForegroundColor Green
 }
 
+# --- MENU PRINCIPAL ---
 do {
     Write-Host "`n======= MENU WINDOWS =======" -ForegroundColor Cyan
     Write-Host "1) Instalar IIS (Obligatorio)"
