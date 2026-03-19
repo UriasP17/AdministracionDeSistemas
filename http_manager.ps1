@@ -1,5 +1,5 @@
 # ==========================================
-# SCRIPT DE GESTION DE SERVIDORES WEB (CHOCOLATEY)
+# SCRIPT DE GESTION DE SERVIDORES WEB
 # ==========================================
 
 $VM_IP = "192.168.56.10" # Tu IP de VirtualBox
@@ -18,18 +18,18 @@ function Solicitar-Puerto {
         $input_p = Read-Host "Ingresa puerto para $ServicioNombre (ej. 8080, 81)"
         if ([string]::IsNullOrWhiteSpace($input_p)) { return 8080 }
         
-        if ($input_p -notmatch '^\d+$') { Write-Host "[!] Solo numeros." -ForegroundColor Red; continue }
+        if ($input_p -notmatch '^\d+$') { Write-Host "[-] Solo numeros permitidos." -ForegroundColor Red; continue }
         
         $p = [int]$input_p
         
         if ($PUERTOS_RESERVADOS -contains $p) {
-            Write-Host "[!] Puerto $p esta reservado por el sistema. Elige otro." -ForegroundColor Red
+            Write-Host "[-] El puerto $p esta reservado por el sistema. Elige otro." -ForegroundColor Red
             continue
         }
         
         $ocupado = Test-NetConnection -ComputerName localhost -Port $p -WarningAction SilentlyContinue
         if ($ocupado.TcpTestSucceeded) {
-            Write-Host "[!] El puerto $p ya esta ocupado (seguro un servicio anterior no se cerro bien). Intenta con otro." -ForegroundColor Red
+            Write-Host "[-] El puerto $p ya esta ocupado. Intenta con otro." -ForegroundColor Red
             continue
         }
         return $p
@@ -40,54 +40,80 @@ function Crear-Index {
     param([string]$Ruta, [string]$Servicio, [string]$Version, [int]$Puerto)
     if (!(Test-Path $Ruta)) { New-Item -Path $Ruta -ItemType Directory -Force | Out-Null }
     
+    # ======== DISENO MINIMALISTA ========
     $html = @"
 <!DOCTYPE html>
-<html lang="es">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>$Servicio - Puerto $Puerto</title>
+  <title>$Servicio - Port $Puerto</title>
   <style>
     body { 
-        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
-        background-color: #1e1e2e; 
-        color: #e0e0e0; 
-        text-align: center; 
-        padding: 50px; 
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        background-color: #f8f9fa; 
+        color: #333; 
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
         margin: 0;
     }
-    .container { 
-        background: #282a36; 
+    .card { 
+        background: #ffffff; 
         padding: 40px; 
-        border-radius: 12px; 
-        box-shadow: 0px 0px 20px rgba(0, 120, 215, 0.4); 
-        display: inline-block; 
-        border: 1px solid #44475a;
-        min-width: 350px;
+        border-radius: 8px; 
+        box-shadow: 0 4px 6px rgba(0,0,0,0.05); 
+        text-align: left;
+        min-width: 300px;
+        border-top: 4px solid #0078D7;
     }
-    h1 { 
-        color: #00e676; 
+    h2 { 
+        color: #333; 
         margin-top: 0;
-        text-transform: uppercase;
-        letter-spacing: 2px;
-        text-shadow: 0 0 10px rgba(0, 230, 118, 0.3);
+        font-weight: 500;
+        border-bottom: 1px solid #eee;
+        padding-bottom: 10px;
     }
-    p { font-size: 1.1em; line-height: 1.6; margin: 10px 0; }
-    strong { color: #8be9fd; }
-    .url-box {
-        background: #1e1e2e; padding: 10px; border-radius: 6px;
-        margin-top: 20px; font-family: monospace; color: #ff79c6;
-        border: 1px dashed #6272a4;
+    .info-row {
+        margin: 12px 0;
+        font-size: 14px;
+    }
+    .label {
+        color: #666;
+        display: inline-block;
+        width: 100px;
+    }
+    .value {
+        font-weight: 500;
+        color: #000;
+    }
+    .code-block {
+        background: #f1f3f5;
+        padding: 8px 12px;
+        border-radius: 4px;
+        font-family: monospace;
+        font-size: 13px;
+        color: #0078D7;
+        margin-top: 20px;
     }
   </style>
 </head>
 <body>
-  <div class="container">
-      <h1>¡Servidor Activo!</h1>
-      <p><strong>Servidor:</strong> $Servicio</p>
-      <p><strong>Versión:</strong> $Version</p>
-      <p><strong>Puerto:</strong> $Puerto</p>
-      <p><strong>IP VirtualBox:</strong> $VM_IP</p>
-      <div class="url-box">URL: http://${VM_IP}:${Puerto}</div>
+  <div class="card">
+      <h2>Servidor Activo</h2>
+      <div class="info-row">
+          <span class="label">Servicio:</span>
+          <span class="value">$Servicio</span>
+      </div>
+      <div class="info-row">
+          <span class="label">Version:</span>
+          <span class="value">$Version</span>
+      </div>
+      <div class="info-row">
+          <span class="label">Puerto:</span>
+          <span class="value">$Puerto</span>
+      </div>
+      <div class="code-block">http://${VM_IP}:${Puerto}</div>
   </div>
 </body>
 </html>
@@ -103,9 +129,9 @@ function Configurar-Firewall {
 }
 
 Function Instalar-IIS {
-    Write-Host "`n[*] Configurando servidor HTTP Nativo de Windows..." -ForegroundColor Cyan
+    Write-Host "`n[*] Configurando servidor HTTP Nativo..." -ForegroundColor Cyan
     
-    $puerto = Solicitar-Puerto -ServicioNombre "IIS Nativo"
+    $puerto = Solicitar-Puerto -ServicioNombre "IIS_Nativo"
     
     $webRoot = "C:\inetpub\wwwroot\mi_sitio"
     Crear-Index -Ruta $webRoot -Servicio "Windows HTTP Nativo" -Version "System.Net" -Puerto $puerto
@@ -130,23 +156,23 @@ while (`$listener.IsListening) {
 "@
 
     Start-Process powershell.exe -ArgumentList "-WindowStyle Hidden -NoProfile -Command `"$codigoServidor`""
-    Write-Host "[+] Servidor Web Nativo activo en el puerto $puerto." -ForegroundColor Green
-    Write-Host "[>] Abre en tu Host: http://${VM_IP}:${puerto}" -ForegroundColor Yellow
+    Write-Host "[+] Servidor activo en puerto $puerto." -ForegroundColor Green
+    Write-Host "[>] URL: http://${VM_IP}:${puerto}" -ForegroundColor Yellow
 }
 
 Function Desinstalar-IIS {
-    Write-Host "`n[*] Desinstalando IIS y liberando el puerto..." -ForegroundColor Yellow
+    Write-Host "`n[*] Desinstalando IIS y liberando puertos..." -ForegroundColor Yellow
     
-    # AQUI LA MAGIA: Busca en las entrañas de Windows el script oculto y lo mata liberando tu puerto
+    # Matar proceso via WMI para asegurar que suelte el puerto
     $iisProcs = Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe' AND CommandLine LIKE '%ServidorNativoIIS%'"
     foreach ($p in $iisProcs) {
         Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
     }
     
-    # BORRAR LA REGLA DEL PUERTO PARA REUSARLO
+    # Limpieza agresiva de firewall
     Get-NetFirewallRule -DisplayName "HTTP-HTTP-Nativo-*" -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
     
-    Write-Host "[-] Sitio HTTP Nativo apagado y puerto liberado con éxito." -ForegroundColor Green
+    Write-Host "[-] Sitio apagado. Puerto liberado." -ForegroundColor Green
 }
 
 Function Instalar-Opcional {
@@ -158,7 +184,7 @@ Function Instalar-Opcional {
     $ver = "Latest"
     $puerto = Solicitar-Puerto -ServicioNombre $Servicio
 
-    Write-Host "[*] Instalando $Servicio ($ver) desde Chocolatey (esto puede tardar un poco)..." -ForegroundColor Cyan
+    Write-Host "[*] Descargando paquetes ($ver)..." -ForegroundColor Cyan
     
     if ($Servicio -eq "nginx") {
         choco install $paquete -y --force --package-parameters "/port:$puerto" | Out-Null
@@ -166,7 +192,6 @@ Function Instalar-Opcional {
         choco install $paquete -y --force | Out-Null
     }
     
-    Write-Host "[*] Dando tiempo al sistema para desempaquetar archivos..." -ForegroundColor Yellow
     Start-Sleep -Seconds 3
 
     $archivoConf = $null
@@ -199,10 +224,9 @@ Function Instalar-Opcional {
             
             $exeNginx = Get-ChildItem -Path $nginxRoot -Filter "nginx.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
             if ($exeNginx) {
-                Write-Host "[*] Arrancando Nginx en segundo plano..." -ForegroundColor Yellow
                 Start-Process $exeNginx.FullName -WorkingDirectory $exeNginx.Directory.FullName -WindowStyle Hidden
-            } else { Write-Host "[X] Error: Se encontro config, pero no nginx.exe." -ForegroundColor Red; return }
-        } else { Write-Host "[X] Error: No se encontro nginx.conf. Revisa si Chocolatey lanzo algun error." -ForegroundColor Red; return }
+            } else { Write-Host "[-] Error: nginx.exe no encontrado." -ForegroundColor Red; return }
+        } else { Write-Host "[-] Error: nginx.conf no encontrado." -ForegroundColor Red; return }
     }
 
     if ($Servicio -eq "apache") {
@@ -224,8 +248,6 @@ Function Instalar-Opcional {
             
             $apacheExe = Get-ChildItem -Path $apacheRoot -Filter "httpd.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
             if ($apacheExe) {
-                Write-Host "[*] Instalando y arrancando Apache como Servicio SSH..." -ForegroundColor Yellow
-                
                 & $apacheExe.FullName -k uninstall 2>$null
                 Get-Process -Name "httpd" -ErrorAction SilentlyContinue | Stop-Process -Force
                 Start-Sleep -Seconds 2
@@ -233,15 +255,15 @@ Function Instalar-Opcional {
                 & $apacheExe.FullName -k install 2>$null
                 Start-Sleep -Seconds 2
                 
-                net start Apache2.4
+                net start Apache2.4 | Out-Null
                 
-            } else { Write-Host "[X] Error: No encontre httpd.exe" -ForegroundColor Red; return }
-        } else { Write-Host "[X] Error: No se encontro httpd.conf." -ForegroundColor Red; return }
+            } else { Write-Host "[-] Error: httpd.exe no encontrado." -ForegroundColor Red; return }
+        } else { Write-Host "[-] Error: httpd.conf no encontrado." -ForegroundColor Red; return }
     }
 
     Configurar-Firewall -Puerto $puerto -Nombre $Servicio
-    Write-Host "[+] $Servicio instalado correctamente." -ForegroundColor Green
-    Write-Host "[>] Abre en tu Host: http://${VM_IP}:${puerto}" -ForegroundColor Yellow
+    Write-Host "[+] $Servicio instalado correctamente en puerto $puerto." -ForegroundColor Green
+    Write-Host "[>] URL: http://${VM_IP}:${puerto}" -ForegroundColor Yellow
 }
 
 Function Desinstalar-Opcional {
@@ -249,6 +271,8 @@ Function Desinstalar-Opcional {
     $paquete = if ($Servicio -eq "apache") { "apache-httpd" } else { "nginx" }
     
     Write-Host "`n[*] Desinstalando $Servicio y liberando puerto..." -ForegroundColor Yellow
+    
+    # Matar procesos agresivamente para soltar el puerto
     if ($Servicio -eq "nginx") { 
         Get-Process -Name "nginx" -ErrorAction SilentlyContinue | Stop-Process -Force 
     }
@@ -261,21 +285,22 @@ Function Desinstalar-Opcional {
 
     choco uninstall $paquete -y | Out-Null
     
-    # BARREMOS EL FIREWALL DE ESE SERVICIO
+    # Limpiar firewall para reusar puerto
     Get-NetFirewallRule -DisplayName "HTTP-$Servicio-*" -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
     
+    # Borrar archivos
     Get-ChildItem -Path "C:\tools" -Filter "*$paquete*" -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     if ($Servicio -eq "apache") { Get-ChildItem -Path "C:\tools" -Filter "*apache24*" -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue }
     if ($Servicio -eq "nginx") { Get-ChildItem -Path "C:\tools" -Filter "*nginx*" -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue }
 
-    Write-Host "[-] $Servicio desinstalado y puerto liberado con éxito." -ForegroundColor Green
+    Write-Host "[-] $Servicio desinstalado. Puerto liberado." -ForegroundColor Green
 }
 
 do {
-    Write-Host "`n======= MENU WINDOWS =======" -ForegroundColor Cyan
-    Write-Host "1) Instalar IIS (Obligatorio)"
-    Write-Host "2) Instalar Apache (Opcional)"
-    Write-Host "3) Instalar Nginx (Opcional)"
+    Write-Host "`n=== MENU WINDOWS SERVER ===" -ForegroundColor Cyan
+    Write-Host "1) Instalar IIS (Nativo)"
+    Write-Host "2) Instalar Apache"
+    Write-Host "3) Instalar Nginx"
     Write-Host "4) Desinstalar IIS"
     Write-Host "5) Desinstalar Apache"
     Write-Host "6) Desinstalar Nginx"
@@ -290,7 +315,7 @@ do {
         "4" { Desinstalar-IIS }
         "5" { Desinstalar-Opcional -Servicio "apache" }
         "6" { Desinstalar-Opcional -Servicio "nginx" }
-        "0" { Write-Host "Saliendo del script..."; break }
-        default { Write-Host "[X] Opcion no valida." -ForegroundColor Red }
+        "0" { Write-Host "Saliendo..."; break }
+        default { Write-Host "[-] Opcion no valida." -ForegroundColor Red }
     }
 } while ($opcion -ne "0")
