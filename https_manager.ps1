@@ -3,13 +3,10 @@
 # ====================================================================
 # VARIABLES GLOBALES
 # ====================================================================
-# PON LA IP DE TU FEDORA AQUI (De donde va a bajar los .zip si usas FTP)
 $FTP_SERVER   = "192.168.56.20" 
 $FTP_USER     = "repositorio"
 $FTP_PASS     = "Hola1234."
 $FTP_BASE     = "http/Windows"
-
-# Tu IP de Windows donde estas corriendo esto
 $IP_WINDOWS   = "192.168.56.10"
 
 $script:RESUMEN_INSTALACIONES = @()
@@ -31,7 +28,6 @@ function Listar-Versiones-FTP {
     param($Servicio)
     $url = "ftp://${FTP_SERVER}/${FTP_BASE}/${Servicio}/"
     Write-Host "`nNavegando en $url ..." -ForegroundColor Cyan
-
     try {
         $request = [System.Net.FtpWebRequest]::Create($url)
         $request.Method = [System.Net.WebRequestMethods+Ftp]::ListDirectory
@@ -40,15 +36,12 @@ function Listar-Versiones-FTP {
         $reader = New-Object System.IO.StreamReader($response.GetResponseStream())
         $contenido = $reader.ReadToEnd()
         $reader.Close(); $response.Close()
-
         $versiones = $contenido -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" -and $_ -notmatch '\.(sha256|md5)$' }
     } catch {
-        Write-Host "[ERROR] No se pudo conectar al FTP de Linux o no existe la ruta. Verificaste la IP?" -ForegroundColor Red
+        Write-Host "[ERROR] No se pudo conectar al FTP o no existe la ruta." -ForegroundColor Red
         return "INVALIDO"
     }
-
     if ($versiones.Count -eq 0) { Write-Host "No hay archivos."; return "INVALIDO" }
-
     for ($i = 0; $i -lt $versiones.Count; $i++) { Write-Host "$($i+1)) $($versiones[$i])" }
     $sel = Read-Host "Selecciona el instalador"
     if ($sel -match '^\d+$' -and [int]$sel -le $versiones.Count) { return $versiones[[int]$sel - 1] }
@@ -60,29 +53,25 @@ function Descargar-Y-Validar {
     $url_base = "ftp://${FTP_SERVER}/${FTP_BASE}/${Servicio}/"
     $destino  = "$env:TEMP\$Archivo"
     $sha_dest = "$env:TEMP\${Archivo}.sha256"
-
     Write-Host "Descargando $Archivo por FTP..."
     $wc = New-Object System.Net.WebClient
     $wc.Credentials = New-Object System.Net.NetworkCredential($FTP_USER, $FTP_PASS)
-
     try { $wc.DownloadFile("${url_base}${Archivo}", $destino) }
     catch { Write-Host "ERROR al descargar binario." -ForegroundColor Red; return $false }
-
     Write-Host "Descargando firma de integridad (.sha256)..."
     try {
         $wc.DownloadFile("${url_base}${Archivo}.sha256", $sha_dest)
         $hash_remoto = (Get-Content $sha_dest).Split(" ")[0].Trim().ToLower()
         $hash_local  = (Get-FileHash $destino -Algorithm SHA256).Hash.ToLower()
-
         if ($hash_remoto -eq $hash_local) {
-            Write-Host "[OK] Integridad SHA256 validada correctamente." -ForegroundColor Green
+            Write-Host "[OK] Integridad SHA256 validada." -ForegroundColor Green
             return $true
         } else {
             Write-Host "[ERROR] Archivo corrupto. Hashes no coinciden." -ForegroundColor Red
             return $false
         }
     } catch { 
-        Write-Host "[ALERTA] No se encontro archivo .sha256 en el servidor Linux. Omitiendo hash..." -ForegroundColor Yellow
+        Write-Host "[ALERTA] No se encontro archivo .sha256. Omitiendo hash..." -ForegroundColor Yellow
         return $true 
     }
 }
@@ -105,7 +94,6 @@ function Generar-SSL-App {
     param($Nombre)
     $cert_dir = "$SSL_DIR\$Nombre"
     New-Item -ItemType Directory -Force -Path $cert_dir | Out-Null
-    
     $cert = New-SelfSignedCertificate -DnsName "www.reprobados.com", $IP_WINDOWS -CertStoreLocation "cert:\LocalMachine\My" -NotAfter (Get-Date).AddDays(365) -FriendlyName "Reprobados-$Nombre"
     $pwd = ConvertTo-SecureString -String "reprobados" -Force -AsPlainText
     Export-PfxCertificate -Cert $cert -FilePath "$cert_dir\server.pfx" -Password $pwd | Out-Null
@@ -156,16 +144,13 @@ function Instalar-IIS {
     if ($SSL -eq "S" -or $SSL -eq "s") {
         Write-Host "Configurando HTTPS, Redireccion automatica y HSTS..."
         $thumb = Generar-SSL-Nativo "IIS-Web"
-        
         $guid = [guid]::NewGuid().ToString("B")
         netsh http delete sslcert ipport=0.0.0.0:$p_https 2>$null
         netsh http add sslcert ipport=0.0.0.0:$p_https certhash=$thumb appid="$guid" | Out-Null
 
-        # HTTPS Real
         & $appcmd add site /name:"Practica7_IIS_HTTPS" /bindings:https://*:${p_https} /physicalPath:"$IIS_DIR"
         & $appcmd set config "Practica7_IIS_HTTPS" /section:system.webServer/httpProtocol /+customHeaders.[name='Strict-Transport-Security',value='max-age=31536000; includeSubDomains'] /commit:apphost
 
-        # HTTP Redireccion (AQUI ESTA LA FIX DEL VARIABLE PARSER)
         & $appcmd add site /name:"Practica7_IIS_HTTP" /bindings:http://*:${p_http} /physicalPath:"$IIS_REDIR"
         & $appcmd set config "Practica7_IIS_HTTP" /section:system.webServer/httpRedirect /enabled:true /destination:"https://${IP_WINDOWS}:$p_https" /exactDestination:false /httpResponseStatus:Permanent /commit:apphost
         
@@ -220,7 +205,6 @@ Listen $p_https
     SSLCertificateKeyFile "$cert_dir\server.pfx"
     Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
 </VirtualHost>
-
 <VirtualHost *:$p_http>
     ServerName $IP_WINDOWS
     RewriteEngine On
@@ -324,11 +308,9 @@ function Instalar-IISFTP {
     if ($SSL -eq "S" -or $SSL -eq "s") {
         Write-Host "Configurando FTPS (Tunel SSL)..."
         $thumb = Generar-SSL-Nativo "IIS-FTP"
-        
         & $appcmd set config "Practica7_IIS_FTP" /section:system.applicationHost/sites "/[name='Practica7_IIS_FTP'].ftpServer.security.ssl.controlChannelPolicy:Require" /commit:apphost
         & $appcmd set config "Practica7_IIS_FTP" /section:system.applicationHost/sites "/[name='Practica7_IIS_FTP'].ftpServer.security.ssl.dataChannelPolicy:Require" /commit:apphost
         & $appcmd set config "Practica7_IIS_FTP" /section:system.applicationHost/sites "/[name='Practica7_IIS_FTP'].ftpServer.security.ssl.serverCertHash:$thumb" /commit:apphost
-        
         $script:SERVICIOS_VERIFICAR += "IIS-FTPS|FTPSVC|$p_ftp|ftps"
     } else {
         & $appcmd set config "Practica7_IIS_FTP" /section:system.applicationHost/sites "/[name='Practica7_IIS_FTP'].ftpServer.security.ssl.controlChannelPolicy:Allow" /commit:apphost
@@ -351,7 +333,6 @@ function Verificar-HTTP {
     
     try {
         [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
-        # AQUI ESTA LA OTRA FIX DEL VARIABLE PARSER
         $r = Invoke-WebRequest "${Proto}://${IP_WINDOWS}:${Puerto}" -UseBasicParsing -TimeoutSec 3 -ErrorAction Stop
         $resp = $r.StatusCode
         $hsts = if ($r.Headers["Strict-Transport-Security"]) {"HSTS: OK"} else {""}
@@ -399,4 +380,50 @@ function Mostrar-Resumen {
 # ====================================================================
 function Main {
     while ($true) {
-        Write-Host "`n===
+        Write-Host "`n=== ORQUESTADOR DE SERVICIOS WEB Y FTP ===" -ForegroundColor Cyan
+        Write-Host "1) Instalar IIS (Web)"
+        Write-Host "2) Instalar Apache"
+        Write-Host "3) Instalar Nginx"
+        Write-Host "4) Instalar IIS FTP (FTPS)"
+        Write-Host "5) Mostrar Resumen de Servicios"
+        Write-Host "6) Salir"
+        $opc = Read-Host "Elige una opcion"
+
+        switch ($opc) {
+            "1" { 
+                $ssl = Read-Host "Usar SSL (S/N)"
+                Instalar-IIS $ssl 
+            }
+            "2" {
+                $ssl = Read-Host "Usar SSL (S/N)"
+                $fuente = Read-Host "Descargar de (FTP/WEB)"
+                $archivo = "apache.zip"
+                if ($fuente -eq "FTP") { 
+                    $archivo = Listar-Versiones-FTP "Apache" 
+                    if ($archivo -eq "INVALIDO") { continue }
+                }
+                Instalar-Apache $archivo $fuente $ssl
+            }
+            "3" {
+                $ssl = Read-Host "Usar SSL (S/N)"
+                $fuente = Read-Host "Descargar de (FTP/WEB)"
+                $archivo = "nginx.zip"
+                if ($fuente -eq "FTP") { 
+                    $archivo = Listar-Versiones-FTP "Nginx" 
+                    if ($archivo -eq "INVALIDO") { continue }
+                }
+                Instalar-Nginx $archivo $fuente $ssl
+            }
+            "4" { 
+                $ssl = Read-Host "Usar SSL (S/N)"
+                Instalar-IISFTP $ssl 
+            }
+            "5" { Mostrar-Resumen }
+            "6" { Write-Host "Fuga!"; exit }
+            default { Write-Host "Opcion no valida." -ForegroundColor Red }
+        }
+    }
+}
+
+# Iniciar la magia
+Main
