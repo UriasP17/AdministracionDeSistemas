@@ -130,14 +130,13 @@ function Instalar-IIS {
     Write-Host "Instalando IIS usando DISM..."
     dism.exe /Online /Enable-Feature /FeatureName:IIS-WebServerRole /All /NoRestart /quiet | Out-Null
     dism.exe /Online /Enable-Feature /FeatureName:IIS-WebServerManagementTools /All /NoRestart /quiet | Out-Null
+    dism.exe /Online /Enable-Feature /FeatureName:IIS-ManagementScriptingTools /All /NoRestart /quiet | Out-Null
     dism.exe /Online /Enable-Feature /FeatureName:IIS-HttpRedirect /All /NoRestart /quiet | Out-Null
     
-    # PAUSA OBLIGATORIA para que Windows registre appcmd.exe en System32
     Write-Host "Esperando a que IIS levante sus binarios..." -ForegroundColor Yellow
     Start-Sleep -Seconds 5
     Start-Service WAS, W3SVC -ErrorAction SilentlyContinue
 
-    # Asegurar que appcmd se ejecute como ruta absoluta estable
     $appcmd = "$env:windir\System32\inetsrv\appcmd.exe"
 
     & $appcmd delete site "Practica7_IIS_HTTP" 2>$null
@@ -150,8 +149,6 @@ function Instalar-IIS {
     if ($SSL -eq "S" -or $SSL -eq "s") {
         Write-Host "Configurando HTTPS, Redireccion automatica y HSTS..."
         $thumb = Generar-SSL-Nativo "IIS-Web"
-        
-        # Pausa por si el certificado tarda en registrarse
         Start-Sleep -Seconds 2
         
         $guid = [guid]::NewGuid().ToString("B")
@@ -305,13 +302,13 @@ function Instalar-IISFTP {
     Write-Host "Instalando IIS FTP nativo con DISM..."
     dism.exe /Online /Enable-Feature /FeatureName:IIS-FTPServer /All /NoRestart /quiet | Out-Null
     dism.exe /Online /Enable-Feature /FeatureName:IIS-FTPSvc /All /NoRestart /quiet | Out-Null
+    dism.exe /Online /Enable-Feature /FeatureName:IIS-WebServerManagementTools /All /NoRestart /quiet | Out-Null
+    dism.exe /Online /Enable-Feature /FeatureName:IIS-ManagementScriptingTools /All /NoRestart /quiet | Out-Null
     
-    # PAUSA OBLIGATORIA para evitar el error de appcmd
     Write-Host "Esperando a que IIS FTP levante sus binarios..." -ForegroundColor Yellow
     Start-Sleep -Seconds 5
     Start-Service FTPSVC -ErrorAction SilentlyContinue
 
-    # Asegurar que appcmd se ejecute como ruta absoluta
     $appcmd = "$env:windir\System32\inetsrv\appcmd.exe"
 
     & $appcmd delete site "Practica7_IIS_FTP" 2>$null
@@ -324,8 +321,6 @@ function Instalar-IISFTP {
     if ($SSL -eq "S" -or $SSL -eq "s") {
         Write-Host "Configurando FTPS (Tunel SSL)..."
         $thumb = Generar-SSL-Nativo "IIS-FTP"
-        
-        # Pausa por si el certificado tarda
         Start-Sleep -Seconds 2
         
         & $appcmd set config "Practica7_IIS_FTP" /section:system.applicationHost/sites "/[name='Practica7_IIS_FTP'].ftpServer.security.ssl.controlChannelPolicy:Require" /commit:apphost
