@@ -227,14 +227,15 @@ function Crear-Estructura-Base {
 # --- OPCIONES DEL MENU ---
 function Opcion-Instalar-FTP {
     Escribir-Titulo "Instalar y configurar servidor FTP"
-    Escribir-Info "Instalando componentes IIS..."
+    Escribir-Info "Instalando componentes IIS mediante DISM (Bypass error 0x800f081f)..."
     Desactivar-ComplejidadPassword
-    $features = @("Web-Server", "Web-Ftp-Server", "Web-Ftp-Service", "Web-Mgmt-Console")
-    foreach ($feature in $features) {
-        if ((Get-WindowsFeature -Name $feature).InstallState -ne "Installed") {
-            Install-WindowsFeature -Name $feature -IncludeManagementTools | Out-Null
-        }
-    }
+    
+    # MODIFICACION: Reemplazado Install-WindowsFeature por DISM para evitar errores en tu Windows Server
+    dism.exe /Online /Enable-Feature /FeatureName:IIS-WebServerRole /All /NoRestart | Out-Null
+    dism.exe /Online /Enable-Feature /FeatureName:IIS-WebServerManagementTools /All /NoRestart | Out-Null
+    dism.exe /Online /Enable-Feature /FeatureName:IIS-FTPServer /All /NoRestart | Out-Null
+    dism.exe /Online /Enable-Feature /FeatureName:IIS-FTPSvc /All /NoRestart | Out-Null
+    
     Escribir-Exito "Componentes instalados."
     
     Escribir-Info "Configurando sitio y permisos..."
