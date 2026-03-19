@@ -5,7 +5,7 @@
 # ==========================================
 
 if [ "$EUID" -ne 0 ]; then
-    echo "[!] Ejecuta el script con sudo."
+    echo "[-] Ejecuta el script con sudo."
     sleep 4
     exit 1
 fi
@@ -13,19 +13,17 @@ fi
 # ==========================================
 # DETECTAR IP DEL ADAPTADOR PUENTE (.20)
 # ==========================================
-# Busca cualquier IP que termine en .20 o que esté en la subred 192.168.56.
 VM_IP=$(ip -4 addr show | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | grep -E '\.20$|^192\.168\.56\.' | head -n 1)
 
-# Si no la encuentra en automático, te la pide a mano para no regarla
 if [ -z "$VM_IP" ]; then
-    echo -e "\e[33m[!] No se detecto automaticamente la IP de la 3era red (.20).\e[0m"
+    echo -e "\e[33m[-] No se detecto automaticamente la IP de la red puente.\e[0m"
     read -p "Ingresa tu IP puente manualmente (ej. 192.168.56.20): " VM_IP
 fi
 
 instalar_dependencias_base() {
     echo "[*] Verificando dependencias base..."
     dnf install -y curl net-tools firewalld psmisc iproute >/dev/null 2>&1
-    systemctl enable firewalld --now 2>/dev/null
+    systemctl enable firewalld --now >/dev/null 2>&1
 }
 
 solicitarPuerto() {
@@ -38,15 +36,16 @@ solicitarPuerto() {
         [ -z "$puerto" ] && puerto=8080
         
         if [[ ! "$puerto" =~ ^[0-9]+$ ]] || [ "$puerto" -le 0 ] || [ "$puerto" -gt 65535 ]; then
-            echo -e "\e[31m[!] Ingresa un numero de puerto valido.\e[0m" >&2; continue
+            echo -e "\e[31m[-] Solo numeros permitidos.\e[0m" >&2; continue
         fi
         
         if [[ " ${reservedPorts[*]} " =~ " ${puerto} " ]]; then
-            echo -e "\e[31m[!] Puerto $puerto esta reservado por el sistema. Elige otro.\e[0m" >&2; continue
+            echo -e "\e[31m[-] Puerto $puerto reservado por el sistema. Elige otro.\e[0m" >&2; continue
         fi
         
+        # Omitimos escanear con ss y dejamos que firewalld/semanage se quejen si de verdad esta en uso
         if ss -tuln | grep -q ":$puerto "; then
-            echo -e "\e[31m[!] El puerto $puerto ya esta ocupado. Intenta con otro.\e[0m" >&2; continue
+            echo -e "\e[31m[-] El puerto $puerto ya esta ocupado. Intenta con otro.\e[0m" >&2; continue
         fi
         
         break
@@ -60,29 +59,92 @@ configurar_firewall() {
     firewall-cmd --reload > /dev/null 2>&1
 }
 
+limpiar_firewall() {
+    # Busca y remueve todos los puertos que se hayan abierto manuales (para liberar de verdad)
+    local puertos_activos=$(firewall-cmd --list-ports | grep -oP '\d+(?=/tcp)')
+    for p in $puertos_activos; do
+        firewall-cmd --permanent --remove-port="$p"/tcp >/dev/null 2>&1
+    done
+    firewall-cmd --reload >/dev/null 2>&1
+}
+
 crear_index() {
     local ruta=$1 servicio=$2 version=$3 puerto=$4
     mkdir -p "$ruta"
+    # ======== DISENO MINIMALISTA BLANCO (IGUAL AL DE WINDOWS) ========
     cat <<HTMLEOF > "$ruta/index.html"
 <!DOCTYPE html>
-<html lang="es">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>$servicio - Puerto $puerto</title>
+  <title>$servicio - Port $puerto</title>
   <style>
-    body { font-family: Arial, sans-serif; background-color: #f4f4f9; color: #333; text-align: center; padding: 50px; }
-    .container { background: white; padding: 30px; border-radius: 10px; box-shadow: 0px 0px 10px rgba(0,0,0,0.1); display: inline-block; }
-    h1 { color: #0078D7; }
+    body { 
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        background-color: #f8f9fa; 
+        color: #333; 
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        margin: 0;
+    }
+    .card { 
+        background: #ffffff; 
+        padding: 40px; 
+        border-radius: 8px; 
+        box-shadow: 0 4px 6px rgba(0,0,0,0.05); 
+        text-align: left;
+        min-width: 300px;
+        border-top: 4px solid #0078D7;
+    }
+    h2 { 
+        color: #333; 
+        margin-top: 0;
+        font-weight: 500;
+        border-bottom: 1px solid #eee;
+        padding-bottom: 10px;
+    }
+    .info-row {
+        margin: 12px 0;
+        font-size: 14px;
+    }
+    .label {
+        color: #666;
+        display: inline-block;
+        width: 100px;
+    }
+    .value {
+        font-weight: 500;
+        color: #000;
+    }
+    .code-block {
+        background: #f1f3f5;
+        padding: 8px 12px;
+        border-radius: 4px;
+        font-family: monospace;
+        font-size: 13px;
+        color: #0078D7;
+        margin-top: 20px;
+    }
   </style>
 </head>
 <body>
-  <div class="container">
-      <h1>¡Servidor Activo!</h1>
-      <p><strong>Servidor:</strong> $servicio</p>
-      <p><strong>Version:</strong> $version</p>
-      <p><strong>Puerto:</strong> $puerto</p>
-      <p><strong>IP VirtualBox:</strong> $VM_IP</p>
-      <p>URL: http://${VM_IP}:${puerto}</p>
+  <div class="card">
+      <h2>Servidor Activo</h2>
+      <div class="info-row">
+          <span class="label">Servicio:</span>
+          <span class="value">$servicio</span>
+      </div>
+      <div class="info-row">
+          <span class="label">Version:</span>
+          <span class="value">$version</span>
+      </div>
+      <div class="info-row">
+          <span class="label">Puerto:</span>
+          <span class="value">$puerto</span>
+      </div>
+      <div class="code-block">http://${VM_IP}:${puerto}</div>
   </div>
 </body>
 </html>
@@ -100,10 +162,9 @@ instalar_apache() {
     local version=$(rpm -q httpd --queryformat "%{version}")
     local vhost_dir="/var/www/html"
     
-    # Configurar puerto
     sed -i "s/^Listen .*/Listen $puerto/" /etc/httpd/conf/httpd.conf
     
-    crear_index "$vhost_dir" "Apache (httpd)" "$version" "$puerto"
+    crear_index "$vhost_dir" "Apache" "$version" "$puerto"
     
     if command -v semanage &>/dev/null; then
         semanage port -a -t http_port_t -p tcp "$puerto" 2>/dev/null || \
@@ -112,12 +173,12 @@ instalar_apache() {
     
     configurar_firewall "$puerto"
     
-    echo -e "\e[33m[*] Arrancando Apache en segundo plano...\e[0m"
+    echo -e "\e[33m[*] Arrancando motor de Apache...\e[0m"
     systemctl enable httpd --now >/dev/null 2>&1
     systemctl restart httpd >/dev/null 2>&1
     
-    echo -e "\e[32m[+] apache instalado correctamente.\e[0m"
-    echo -e "\e[33m[>] Abre en tu Host: http://${VM_IP}:${puerto}\e[0m"
+    echo -e "\e[32m[+] apache instalado en puerto $puerto.\e[0m"
+    echo -e "\e[33m[>] URL: http://${VM_IP}:${puerto}\e[0m"
 }
 
 instalar_nginx() {
@@ -131,8 +192,6 @@ instalar_nginx() {
     local version=$(rpm -q nginx --queryformat "%{version}")
     local vhost_dir="/usr/share/nginx/html"
     
-    # ======= FIX PARA NGINX Y LA RED PUENTE =======
-    # Forzamos a Nginx a escuchar especificamente en la IP puente y no en la NAT
     sed -i "s/listen       80;/listen       ${VM_IP}:${puerto};/" /etc/nginx/nginx.conf
     sed -i "s/listen       \[::\]:80;/#listen       \[::\]:80;/" /etc/nginx/nginx.conf
     
@@ -145,12 +204,12 @@ instalar_nginx() {
     
     configurar_firewall "$puerto"
     
-    echo -e "\e[33m[*] Arrancando Nginx en segundo plano...\e[0m"
+    echo -e "\e[33m[*] Arrancando motor de Nginx...\e[0m"
     systemctl enable nginx --now >/dev/null 2>&1
     systemctl restart nginx >/dev/null 2>&1
     
-    echo -e "\e[32m[+] nginx instalado correctamente.\e[0m"
-    echo -e "\e[33m[>] Abre en tu Host: http://${VM_IP}:${puerto}\e[0m"
+    echo -e "\e[32m[+] nginx instalado en puerto $puerto.\e[0m"
+    echo -e "\e[33m[>] URL: http://${VM_IP}:${puerto}\e[0m"
 }
 
 instalar_tomcat() {
@@ -176,12 +235,12 @@ instalar_tomcat() {
     
     configurar_firewall "$puerto"
     
-    echo -e "\e[33m[*] Arrancando Tomcat en segundo plano...\e[0m"
+    echo -e "\e[33m[*] Arrancando motor de Tomcat...\e[0m"
     systemctl enable tomcat --now >/dev/null 2>&1
     systemctl restart tomcat >/dev/null 2>&1
     
-    echo -e "\e[32m[+] tomcat instalado correctamente.\e[0m"
-    echo -e "\e[33m[>] Abre en tu Host: http://${VM_IP}:${puerto}\e[0m"
+    echo -e "\e[32m[+] tomcat instalado en puerto $puerto.\e[0m"
+    echo -e "\e[33m[>] URL: http://${VM_IP}:${puerto}\e[0m"
 }
 
 desinstalar_servicio() {
@@ -189,14 +248,23 @@ desinstalar_servicio() {
     local paquete=$1
     [ "$servicio" == "apache" ] && paquete="httpd"
     
-    echo -e "\n\e[33m[*] Desinstalando $servicio...\e[0m"
+    echo -e "\n\e[33m[*] Desinstalando $servicio y liberando puerto...\e[0m"
     
+    # 1. Parar el servicio civilizadamente
     systemctl stop "$paquete" >/dev/null 2>&1
     systemctl disable "$paquete" >/dev/null 2>&1
-    pkill -f "$paquete" >/dev/null 2>&1
     
+    # 2. Matar procesos zombies como en Windows
+    if [ "$servicio" == "tomcat" ]; then
+        pkill -9 -f "java.*tomcat" >/dev/null 2>&1
+    else
+        pkill -9 -f "$paquete" >/dev/null 2>&1
+    fi
+    
+    # 3. Remover paquete
     dnf remove -y "$paquete" >/dev/null 2>&1
     
+    # 4. Limpieza profunda de directorios
     if [ "$servicio" == "apache" ]; then
         rm -rf /etc/httpd /var/www/html/*
     elif [ "$servicio" == "nginx" ]; then
@@ -205,12 +273,15 @@ desinstalar_servicio() {
         rm -rf /etc/tomcat /var/lib/tomcat/webapps/*
     fi
     
-    echo -e "\e[32m[-] $servicio desinstalado y carpetas limpias.\e[0m"
+    # 5. Limpiar reglas del firewall para reusar puertos
+    limpiar_firewall
+    
+    echo -e "\e[32m[-] $servicio desinstalado. Puerto liberado.\e[0m"
 }
 
 while true; do
-    echo -e "\n\e[36m======= MENU FEDORA =======\e[0m"
-    echo "1) Instalar Apache (httpd)"
+    echo -e "\n\e[36m=== MENU FEDORA SERVER ===\e[0m"
+    echo "1) Instalar Apache"
     echo "2) Instalar Nginx"
     echo "3) Instalar Tomcat"
     echo "4) Desinstalar Apache"
@@ -227,7 +298,7 @@ while true; do
         4) desinstalar_servicio "apache" ;;
         5) desinstalar_servicio "nginx" ;;
         6) desinstalar_servicio "tomcat" ;;
-        0) echo "Saliendo del script..."; break ;;
-        *) echo -e "\e[31m[X] Opcion no valida.\e[0m" ;;
+        0) echo "Saliendo..."; break ;;
+        *) echo -e "\e[31m[-] Opcion no valida.\e[0m" ;;
     esac
 done
