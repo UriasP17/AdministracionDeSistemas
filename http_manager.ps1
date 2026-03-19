@@ -141,7 +141,7 @@ Function Instalar-Opcional {
         } else { Write-Host "[X] Error: No se encontro nginx.conf." -ForegroundColor Red; return }
     }
 
-    if ($Servicio -eq "apache") {
+        if ($Servicio -eq "apache") {
         $archivoConf = Get-ChildItem -Path $rutasBusqueda -Filter "httpd.conf" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($archivoConf) {
             $conf = $archivoConf.FullName
@@ -150,7 +150,7 @@ Function Instalar-Opcional {
 
             (Get-Content $conf) -replace "Listen 80", "Listen $puerto" | Set-Content $conf
             
-            # Quitar ServerName viejo si existe para que no se duplique y falle, luego poner el nuevo
+            # Limpiar ServerName para que no haya duplicados y poner el nuevo
             (Get-Content $conf) -replace "^ServerName.*", "" | Set-Content $conf
             Add-Content -Path $conf -Value "`nServerName localhost:$puerto"
             
@@ -158,21 +158,19 @@ Function Instalar-Opcional {
             
             $apacheExe = Get-ChildItem -Path $apacheRoot -Filter "httpd.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
             if ($apacheExe) {
-                Write-Host "[*] Instalando y arrancando Apache..." -ForegroundColor Yellow
-                # Mata servicios viejos
-                & $apacheExe.FullName -k uninstall 2>$null
+                Write-Host "[*] Arrancando Apache en ventana nueva..." -ForegroundColor Yellow
+                # Mata cualquier proceso viejo
+                Stop-Process -Name "httpd" -Force -ErrorAction SilentlyContinue
                 Start-Sleep -Seconds 1
-                # Instala y prende de forma limpia
-                & $apacheExe.FullName -k install 2>$null
-                & $apacheExe.FullName -k start
+                
+                # Abre Apache en una ventana NUEVA y VISIBLE (para que Windows no lo mate)
+                Start-Process -FilePath $apacheExe.FullName -WorkingDirectory $apacheRoot -WindowStyle Normal
+                
+                Write-Host "[!] IMPORTANTE: Se abrio una ventana negra de Apache. DEJALA ABIERTA, si la cierras el servidor se apaga." -ForegroundColor Cyan
             } else { Write-Host "[X] Error: No encontre httpd.exe" -ForegroundColor Red; return }
         } else { Write-Host "[X] Error: No se encontro httpd.conf." -ForegroundColor Red; return }
     }
 
-    Configurar-Firewall -Puerto $puerto -Nombre $Servicio
-    Write-Host "[+] $Servicio instalado correctamente." -ForegroundColor Green
-    Write-Host "[>] Abre en tu Host: http://${VM_IP}:${puerto}" -ForegroundColor Yellow
-}
 
 Function Desinstalar-Opcional {
     param($Servicio)
