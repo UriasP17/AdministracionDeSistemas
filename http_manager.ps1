@@ -149,14 +149,25 @@ Function Instalar-Opcional {
             $apacheRootFormat = $apacheRoot -replace "\\", "/"
             $htdocs = Join-Path -Path $apacheRoot -ChildPath "htdocs"
 
-            # Arreglar los 3 problemas criticos de Apache en Windows:
-            # 1. El ServerRoot (Error 1 de Servicio)
-            (Get-Content $conf) -replace '^ServerRoot.*', "ServerRoot `"$apacheRootFormat`"" | Set-Content $conf
-            # 2. El Listen (El puerto)
-            (Get-Content $conf) -replace "Listen 80", "Listen $puerto" | Set-Content $conf
-            # 3. El ServerName (Error de arranque)
-            (Get-Content $conf) -replace "^ServerName.*", "" | Set-Content $conf
-            Add-Content -Path $conf -Value "`nServerName localhost:$puerto"
+            # ========================================================
+            # FIX DEFINITIVO: MATAR EL ERROR 1 CORRIGIENDO SRVROOT
+            # ========================================================
+            $textoConf = Get-Content $conf
+            
+            # 1. Cambiar la variable global SRVROOT que usa todo el sistema de Apache
+            $textoConf = $textoConf -replace 'Define SRVROOT .*', "Define SRVROOT `"$apacheRootFormat`""
+            
+            # 2. Reemplazo ciego por si quedó alguna ruta hardcodeada por defecto
+            $textoConf = $textoConf -replace '(?i)c:/Apache24', $apacheRootFormat
+            
+            # 3. Asignar el puerto que elegiste
+            $textoConf = $textoConf -replace '(?m)^Listen\s+\d+', "Listen $puerto"
+            
+            # 4. Forzar el ServerName quitándole el comentario (el #)
+            $textoConf = $textoConf -replace '(?m)^#?\s*ServerName.*', "ServerName localhost:$puerto"
+            
+            # Reescribir el archivo completo
+            $textoConf | Set-Content $conf
             
             Crear-Index -Ruta $htdocs -Servicio "Apache" -Version $ver -Puerto $puerto
             
@@ -164,11 +175,14 @@ Function Instalar-Opcional {
             if ($apacheExe) {
                 Write-Host "[*] Instalando y arrancando Apache como Servicio SSH..." -ForegroundColor Yellow
                 
+                # Desinstalar servicio viejo y purgar procesos colgados
                 & $apacheExe.FullName -k uninstall 2>$null
-                Start-Sleep -Seconds 1
+                Stop-Process -Name "httpd" -Force -ErrorAction SilentlyContinue
+                Start-Sleep -Seconds 2
                 
+                # Instalar el servicio fresco con el httpd.conf ya curado
                 & $apacheExe.FullName -k install 2>$null
-                Start-Sleep -Seconds 1
+                Start-Sleep -Seconds 2
                 
                 # Levantar el servicio
                 net start Apache2.4
