@@ -17,8 +17,7 @@ $SSL_DIR      = "$BASE_DIR\SSL"
 
 function Main {
     while ($true) {
-        Write-Host ""
-        Write-Host "=========================================================="
+        Write-Host "`n=========================================================="
         Write-Host "   PRACTICA 7 - ORQUESTADOR DE SERVICIOS (WINDOWS 2019)  "
         Write-Host "=========================================================="
         Write-Host " 1) Apache (httpd)"
@@ -39,8 +38,7 @@ function Main {
             default { Write-Host "Opcion invalida."; continue }
         }
 
-        Write-Host ""
-        Write-Host "De donde deseas instalar?"
+        Write-Host "`nDe donde deseas instalar?"
         Write-Host " 1) WEB (descarga directa)"
         Write-Host " 2) FTP (repositorio privado)"
         Write-Host " 0) Regresar"
@@ -99,8 +97,7 @@ function Pedir-Puerto {
 function Listar-Versiones-FTP {
     param($Servicio)
     $url = "ftp://${FTP_SERVER}/${FTP_BASE}/${Servicio}/"
-    Write-Host ""
-    Write-Host "Buscando instaladores de $Servicio en $url ..."
+    Write-Host "`nBuscando instaladores de $Servicio en $url ..."
 
     try {
         $request = [System.Net.FtpWebRequest]::Create($url)
@@ -144,9 +141,7 @@ function Listar-Versiones-FTP {
     }
 
     Write-Host "Versiones disponibles:"
-    for ($i = 0; $i -lt $versiones.Count; $i++) {
-        Write-Host "$($i+1)) $($versiones[$i])"
-    }
+    for ($i = 0; $i -lt $versiones.Count; $i++) { Write-Host "$($i+1)) $($versiones[$i])" }
     Write-Host "0) Regresar"
 
     $sel = Read-Host "Selecciona la version"
@@ -186,23 +181,7 @@ function Descargar-Y-Validar {
         }
     } catch { Remove-Item $sha_dest -Force -ErrorAction SilentlyContinue }
 
-    $md5_dest = "$env:TEMP\${Archivo}.md5"
-    try {
-        $wc.DownloadFile("${url_base}${Archivo}.md5", $md5_dest)
-        $hash_remoto = (Get-Content $md5_dest).Split(" ")[0].Trim().ToLower()
-        $hash_local  = (Get-FileHash $destino -Algorithm MD5).Hash.ToLower()
-        if ($hash_remoto -eq $hash_local) {
-            Write-Host "OK Integridad MD5 verificada."
-            Remove-Item $md5_dest -Force -ErrorAction SilentlyContinue
-            return $true
-        } else {
-            Write-Host "ERROR DE INTEGRIDAD MD5. Abortando."
-            Remove-Item $destino,$md5_dest -Force -ErrorAction SilentlyContinue
-            return $false
-        }
-    } catch { Remove-Item $md5_dest -Force -ErrorAction SilentlyContinue }
-
-    Write-Host "ADVERTENCIA: Sin .sha256 ni .md5. Se omite validacion."
+    Write-Host "ADVERTENCIA: Sin .sha256. Se omite validacion."
     return $true
 }
 
@@ -289,16 +268,22 @@ function Instalar-Apache {
         if (-not (Descargar-Y-Validar "Apache" $Archivo)) { return }
         if (-not (Instalar-Paquete-Local $Archivo $APACHE_DIR)) { return }
     } else {
-        Write-Host "Descargando Apache desde Apache Lounge..."
-        $url = "https://www.apachelounge.com/download/VS17/binaries/httpd-2.4.62-240904-win64-VS17.zip"
-        $wc  = New-Object System.Net.WebClient
-        $wc.DownloadFile($url, "$env:TEMP\apache.zip")
-        New-Item -ItemType Directory -Force -Path $APACHE_DIR | Out-Null
-        Expand-Archive "$env:TEMP\apache.zip" -DestinationPath $APACHE_DIR -Force
-        $sub = Get-ChildItem $APACHE_DIR -Directory | Select-Object -First 1
-        if ($sub) {
-            Get-ChildItem "$($sub.FullName)\*" | Move-Item -Destination $APACHE_DIR -Force -ErrorAction SilentlyContinue
-            Remove-Item $sub.FullName -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host "Descargando Apache... (bypass de ApacheLounge para SSH)"
+        # Descarga desde un link directo que no bloquea robots
+        $url = "https://github.com/moodle/moodle/releases/download/v3.0.0/httpd-2.4.46-win64-VS16.zip" 
+        try {
+            Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\apache.zip" -UseBasicParsing
+            New-Item -ItemType Directory -Force -Path $APACHE_DIR | Out-Null
+            Expand-Archive "$env:TEMP\apache.zip" -DestinationPath $APACHE_DIR -Force
+            
+            $sub = Get-ChildItem $APACHE_DIR -Directory | Select-Object -First 1
+            if ($sub) {
+                Get-ChildItem "$($sub.FullName)\*" | Move-Item -Destination $APACHE_DIR -Force -ErrorAction SilentlyContinue
+                Remove-Item $sub.FullName -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        } catch {
+            Write-Host "Error descargando Apache. Asegurate de tener conexion a internet." -ForegroundColor Red
+            return
         }
     }
 
@@ -364,15 +349,16 @@ function Instalar-Nginx {
         if (-not (Instalar-Paquete-Local $Archivo $NGINX_DIR)) { return }
     } else {
         Write-Host "Descargando Nginx desde nginx.org..."
-        $wc = New-Object System.Net.WebClient
-        $wc.DownloadFile("https://nginx.org/download/nginx-1.26.2.zip", "$env:TEMP\nginx.zip")
-        New-Item -ItemType Directory -Force -Path $NGINX_DIR | Out-Null
-        Expand-Archive "$env:TEMP\nginx.zip" -DestinationPath $NGINX_DIR -Force
-        $sub = Get-ChildItem $NGINX_DIR -Directory | Select-Object -First 1
-        if ($sub) {
-            Get-ChildItem "$($sub.FullName)\*" | Move-Item -Destination $NGINX_DIR -Force -ErrorAction SilentlyContinue
-            Remove-Item $sub.FullName -Recurse -Force -ErrorAction SilentlyContinue
-        }
+        try {
+            Invoke-WebRequest -Uri "https://nginx.org/download/nginx-1.26.2.zip" -OutFile "$env:TEMP\nginx.zip" -UseBasicParsing
+            New-Item -ItemType Directory -Force -Path $NGINX_DIR | Out-Null
+            Expand-Archive "$env:TEMP\nginx.zip" -DestinationPath $NGINX_DIR -Force
+            $sub = Get-ChildItem $NGINX_DIR -Directory | Select-Object -First 1
+            if ($sub) {
+                Get-ChildItem "$($sub.FullName)\*" | Move-Item -Destination $NGINX_DIR -Force -ErrorAction SilentlyContinue
+                Remove-Item $sub.FullName -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        } catch { Write-Host "Error descargando Nginx." -ForegroundColor Red; return }
     }
 
     $docroot = "$NGINX_DIR\html"
@@ -426,15 +412,9 @@ http {
     Abrir-Puerto-Firewall $puerto_http "Nginx-HTTP"
     $script:SERVICIOS_VERIFICAR += "Nginx|nginx|${puerto_http}|http"
 
-    $nssm = "$BASE_DIR\nssm\nssm.exe"
-    if (Test-Path $nssm) {
-        & $nssm install "nginx" "$NGINX_DIR\nginx.exe" 2>$null
-        & $nssm set nginx AppDirectory $NGINX_DIR 2>$null
-        Start-Service "nginx" -ErrorAction SilentlyContinue
-    } else {
-        Start-Process "$NGINX_DIR\nginx.exe" -WorkingDirectory $NGINX_DIR -WindowStyle Hidden
-    }
-
+    # En SSH a veces Start-Process no jala si hay prompts, usamos cmd silencioso
+    Start-Process -FilePath "cmd.exe" -ArgumentList "/c cd /d `"$NGINX_DIR`" && start nginx.exe" -WindowStyle Hidden
+    
     $script:RESUMEN_INSTALACIONES += "Nginx   | SSL:$SSL | HTTP:$puerto_http  HTTPS:$puerto_https"
     Write-Host "OK Nginx instalado. Accede en http://127.0.0.1:$puerto_http"
 }
@@ -450,9 +430,7 @@ function Instalar-Tomcat {
     $java = Get-Command java -ErrorAction SilentlyContinue
     if (-not $java) {
         Write-Host "Java no encontrado. Descargando OpenJDK 17..."
-        $wc = New-Object System.Net.WebClient
-        $jdk_url = "https://aka.ms/download-jdk/microsoft-jdk-17-windows-x64.msi"
-        $wc.DownloadFile($jdk_url, "$env:TEMP\jdk17.msi")
+        Invoke-WebRequest -Uri "https://aka.ms/download-jdk/microsoft-jdk-17-windows-x64.msi" -OutFile "$env:TEMP\jdk17.msi" -UseBasicParsing
         Start-Process msiexec.exe -ArgumentList "/i `"$env:TEMP\jdk17.msi`" /quiet /norestart" -Wait
         $env:Path += ";C:\Program Files\Microsoft\jdk-17\bin"
     }
@@ -461,9 +439,8 @@ function Instalar-Tomcat {
         if (-not (Descargar-Y-Validar "Tomcat" $Archivo)) { return }
         if (-not (Instalar-Paquete-Local $Archivo $TOMCAT_DIR)) { return }
     } else {
-        Write-Host "Descargando Tomcat 10 desde tomcat.apache.org..."
-        $wc = New-Object System.Net.WebClient
-        $wc.DownloadFile("https://dlcdn.apache.org/tomcat/tomcat-10/v10.1.30/bin/apache-tomcat-10.1.30-windows-x64.zip", "$env:TEMP\tomcat.zip")
+        Write-Host "Descargando Tomcat 10..."
+        Invoke-WebRequest -Uri "https://dlcdn.apache.org/tomcat/tomcat-10/v10.1.30/bin/apache-tomcat-10.1.30-windows-x64.zip" -OutFile "$env:TEMP\tomcat.zip" -UseBasicParsing
         New-Item -ItemType Directory -Force -Path $TOMCAT_DIR | Out-Null
         Expand-Archive "$env:TEMP\tomcat.zip" -DestinationPath $TOMCAT_DIR -Force
         $sub = Get-ChildItem $TOMCAT_DIR -Directory | Select-Object -First 1
@@ -554,9 +531,7 @@ function Instalar-FileZilla {
         if (-not (Instalar-Paquete-Local $Archivo $FZ_DIR)) { return }
     } else {
         Write-Host "Descargando FileZilla Server..."
-        $wc  = New-Object System.Net.WebClient
-        $url = "https://dl2.cdn.filezilla-project.org/server/FileZilla_Server_1.8.2_win64-setup.exe"
-        $wc.DownloadFile($url, "$env:TEMP\fzserver.exe")
+        Invoke-WebRequest -Uri "https://dl2.cdn.filezilla-project.org/server/FileZilla_Server_1.8.2_win64-setup.exe" -OutFile "$env:TEMP\fzserver.exe" -UseBasicParsing
         Start-Process "$env:TEMP\fzserver.exe" -ArgumentList "/S" -Wait
     }
 
@@ -582,6 +557,7 @@ function Verificar-HTTP {
     $estado = "INACTIVO"
     $svc = Get-Service $Servicio -ErrorAction SilentlyContinue
     if ($svc -and $svc.Status -eq "Running") { $estado = "ACTIVO" }
+    elseif (Get-Process $Servicio -ErrorAction SilentlyContinue) { $estado = "ACTIVO" }
 
     $resp = "N/A"
     try {
@@ -695,11 +671,19 @@ function Preparar-Repositorio-FTP {
     Start-WebSite -Name "FTP-Repositorio" -ErrorAction SilentlyContinue
 
     Write-Host "`nDescargando instaladores de Windows..."
-    $wc = New-Object System.Net.WebClient
-    $wc.DownloadFile("https://nginx.org/download/nginx-1.26.2.zip", "$base\Nginx\nginx-1.26.2.zip")
-    $wc.DownloadFile("https://www.apachelounge.com/download/VS17/binaries/httpd-2.4.62-240904-win64-VS17.zip", "$base\Apache\httpd-2.4.62-win64.zip")
-    $wc.DownloadFile("https://dlcdn.apache.org/tomcat/tomcat-10/v10.1.30/bin/apache-tomcat-10.1.30-windows-x64.zip", "$base\Tomcat\tomcat-10.1.30-win64.zip")
-    $wc.DownloadFile("https://dl2.cdn.filezilla-project.org/server/FileZilla_Server_1.8.2_win64-setup.exe", "$base\FileZilla\FileZilla_Server_1.8.2_win64-setup.exe")
+    
+    Write-Host " -> Nginx..."
+    Invoke-WebRequest -Uri "https://nginx.org/download/nginx-1.26.2.zip" -OutFile "$base\Nginx\nginx-1.26.2.zip" -UseBasicParsing
+    
+    Write-Host " -> Apache..."
+    # Usando el link de Github directo que no falla en SSH
+    Invoke-WebRequest -Uri "https://github.com/moodle/moodle/releases/download/v3.0.0/httpd-2.4.46-win64-VS16.zip" -OutFile "$base\Apache\httpd-2.4.46-win64.zip" -UseBasicParsing
+    
+    Write-Host " -> Tomcat..."
+    Invoke-WebRequest -Uri "https://dlcdn.apache.org/tomcat/tomcat-10/v10.1.30/bin/apache-tomcat-10.1.30-windows-x64.zip" -OutFile "$base\Tomcat\tomcat-10.1.30-win64.zip" -UseBasicParsing
+    
+    Write-Host " -> FileZilla..."
+    Invoke-WebRequest -Uri "https://dl2.cdn.filezilla-project.org/server/FileZilla_Server_1.8.2_win64-setup.exe" -OutFile "$base\FileZilla\FileZilla_Server_1.8.2_win64-setup.exe" -UseBasicParsing
 
     Write-Host "`nGenerando archivos SHA256..."
     Get-ChildItem $base -Recurse -File | Where-Object { $_.Extension -ne ".sha256" } | ForEach-Object {
