@@ -230,7 +230,6 @@ function Opcion-Instalar-FTP {
     Escribir-Info "Instalando componentes IIS mediante DISM (Bypass error 0x800f081f)..."
     Desactivar-ComplejidadPassword
     
-    # MODIFICACION: Reemplazado Install-WindowsFeature por DISM para evitar errores en tu Windows Server
     dism.exe /Online /Enable-Feature /FeatureName:IIS-WebServerRole /All /NoRestart | Out-Null
     dism.exe /Online /Enable-Feature /FeatureName:IIS-WebServerManagementTools /All /NoRestart | Out-Null
     dism.exe /Online /Enable-Feature /FeatureName:IIS-FTPServer /All /NoRestart | Out-Null
@@ -238,8 +237,25 @@ function Opcion-Instalar-FTP {
     
     Escribir-Exito "Componentes instalados."
     
-    Escribir-Info "Configurando sitio y permisos..."
+    Escribir-Info "Forzando carga del modulo IIS..."
+    Start-Service -Name "WAS" -ErrorAction SilentlyContinue
+    Start-Service -Name "W3SVC" -ErrorAction SilentlyContinue
+    
     Import-Module WebAdministration -Force -ErrorAction SilentlyContinue
+    
+    $intentos = 0
+    while (-not (Test-Path "IIS:\") -and $intentos -lt 10) {
+        Start-Sleep -Seconds 2
+        Import-Module WebAdministration -Force -ErrorAction SilentlyContinue
+        $intentos++
+    }
+    
+    if (-not (Test-Path "IIS:\")) {
+        Escribir-ErrorMsg "El modulo WebAdministration no se cargo correctamente. Intenta reiniciar la sesion SSH y vuelve a correr el script."
+        return
+    }
+
+    Escribir-Info "Configurando sitio y permisos..."
     if (Get-WebSite -Name $ftpSiteName -ErrorAction SilentlyContinue) {
         Stop-Service -Name "W3SVC", "FTPSVC" -Force -ErrorAction SilentlyContinue
         Remove-WebSite -Name $ftpSiteName
@@ -258,10 +274,15 @@ function Opcion-Instalar-FTP {
     Set-ItemProperty "IIS:\Sites\$ftpSiteName" -Name ftpServer.security.authentication.basicAuthentication.enabled -Value $true
 
     Set-FtpUserIsolation -SiteName $ftpSiteName -Mode "IsolateAllDirectories"
-    Set-FtpAuthRules -SiteName $ftpSiteName -Rules @(
-        @{ users = "?"; roles = ""; permissions = "Read" },
-        @{ users = "*"; roles = ""; permissions = "Read,Write" }
-    )
+    
+    try {
+        Set-FtpAuthRules -SiteName $ftpSiteName -Rules @(
+            @{ users = "?"; roles = ""; permissions = "Read" },
+            @{ users = "*"; roles = ""; permissions = "Read,Write" }
+        )
+    } catch {
+        Escribir-ErrorMsg "No se pudo inyectar las reglas XML, pero el FTP basico esta arriba."
+    }
 
     if (-not (Get-NetFirewallRule -DisplayName "FTP" -ErrorAction SilentlyContinue)) {
         New-NetFirewallRule -DisplayName "FTP" -Direction Inbound -Protocol TCP -LocalPort 21 -Action Allow | Out-Null
@@ -412,60 +433,4 @@ function Opcion-Eliminar-Usuario {
     }
 }
 
-function Opcion-Ver-Usuarios {
-    Escribir-Titulo "Usuarios Registrados"
-    $usuariosEncontrados = @()
-
-    foreach ($grupo in $GRUPOS) {
-        $miembros = Get-LocalGroupMember -Group $grupo -ErrorAction SilentlyContinue
-        foreach ($miembro in $miembros) {
-            $usuariosEncontrados += [PSCustomObject]@{
-                Usuario = $miembro.Name.Split('\')[-1]
-                Grupo   = $grupo
-            }
-        }
-    }
-
-    if ($usuariosEncontrados.Count -eq 0) {
-        Escribir-Info "No hay usuarios."
-    } else {
-        foreach ($u in ($usuariosEncontrados | Sort-Object Usuario)) {
-            $linea = "- $($u.Usuario) ($($u.Grupo))"
-            if ($u.Grupo -eq "reprobados") { Write-Host $linea -ForegroundColor Red } 
-            else { Write-Host $linea -ForegroundColor Yellow }
-        }
-    }
-}
-
-function Menu-Principal {
-    while ($true) {
-        Clear-Host
-        Write-Host "`n==============================" -ForegroundColor Cyan
-        Write-Host " ADMINISTRADOR FTP (IIS)" -ForegroundColor White
-        Write-Host "==============================" -ForegroundColor Cyan
-        Write-Host " [1] Instalar y configurar" 
-        Write-Host " [2] Agregar usuarios" 
-        Write-Host " [3] Reasignar grupo" 
-        Write-Host " [4] Borrar usuario" 
-        Write-Host " [5] Ver usuarios" 
-        Write-Host " [0] Salir" -ForegroundColor DarkGray
-        Write-Host "------------------------------" -ForegroundColor Cyan
-        
-        $opt = Read-Host "Opcion"
-
-        switch ($opt) {
-            "1" { Opcion-Instalar-FTP }
-            "2" { Opcion-Crear-Usuarios }
-            "3" { Opcion-Cambiar-Grupo }
-            "4" { Opcion-Eliminar-Usuario }
-            "5" { Opcion-Ver-Usuarios }
-            "0" { exit }
-            default { Escribir-ErrorMsg "Opcion no valida." }
-        }
-        
-        Write-Host ""
-        $null = Read-Host "Presiona ENTER para continuar"
-    }
-}
-
-Menu-Principal
+function
