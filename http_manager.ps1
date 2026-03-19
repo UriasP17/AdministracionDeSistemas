@@ -79,35 +79,33 @@ function Configurar-Firewall {
 
 Function Instalar-IIS {
     $puerto = 80
-    Write-Host "`n[*] Configurando servidor HTTP Nativo de Windows (Alternativa a IIS)..." -ForegroundColor Cyan
+    Write-Host "`n[*] Configurando servidor HTTP Nativo de Windows..." -ForegroundColor Cyan
     
     $webRoot = "C:\inetpub\wwwroot\mi_sitio"
     Crear-Index -Ruta $webRoot -Servicio "Windows HTTP Nativo" -Version "System.Net" -Puerto $puerto
     Configurar-Firewall -Puerto $puerto -Nombre "HTTP-Nativo"
     
-    # Creamos un script en segundo plano que mantendra viva tu pagina web en el puerto 80
     $codigoServidor = @"
-        `$listener = New-Object System.Net.HttpListener
-        `$listener.Prefixes.Add('http://*:$puerto/')
-        `$listener.Start()
-        while (`$listener.IsListening) {
-            `$context = `$listener.GetContext()
-            `$response = `$context.Response
-            `$content = Get-Content -Path '$webRoot\index.html' -Raw
-            `$buffer = [System.Text.Encoding]::UTF8.GetBytes(`$content)
-            `$response.ContentLength64 = `$buffer.Length
-            `$response.OutputStream.Write(`$buffer, 0, `$buffer.Length)
-            `$response.Close()
-        }
+        try {
+            `$listener = New-Object System.Net.HttpListener
+            `$listener.Prefixes.Add('http://*:$puerto/')
+            `$listener.Start()
+            while (`$listener.IsListening) {
+                `$context = `$listener.GetContext()
+                `$response = `$context.Response
+                `$content = Get-Content -Path '$webRoot\index.html' -Raw
+                `$buffer = [System.Text.Encoding]::UTF8.GetBytes(`$content)
+                `$response.ContentLength64 = `$buffer.Length
+                `$response.OutputStream.Write(`$buffer, 0, `$buffer.Length)
+                `$response.Close()
+            }
+        } catch { exit }
 "@
 
-    # Matar cualquier intento anterior para que no choque
-    Stop-Process -Name "powershell" -Force -ErrorAction SilentlyContinue | Where-Object { $_.Id -ne $PID }
-
-    # Lanzar el mini-servidor web nativo de Windows en el fondo
+    # Lanzar el servidor en segundo plano de forma silenciosa sin matar nada
     Start-Process powershell.exe -ArgumentList "-WindowStyle Hidden -NoProfile -Command `"$codigoServidor`""
     
-    Write-Host "[+] Servidor Web Nativo configurado y activo en el puerto $puerto." -ForegroundColor Green
+    Write-Host "[+] Servidor Web Nativo activo en el puerto $puerto." -ForegroundColor Green
     Write-Host "[>] Abre en tu Host: http://${VM_IP}" -ForegroundColor Yellow
 }
 
