@@ -81,28 +81,41 @@ Function Instalar-IIS {
     $puerto = 80
     Write-Host "`n[*] Verificando si IIS esta instalado..." -ForegroundColor Cyan
     
-    # 1. Verificamos si existe el ejecutable appcmd (es la forma mas segura de saber si IIS esta vivo)
     $appcmd = "$env:systemroot\system32\inetsrv\appcmd.exe"
     
     if (-not (Test-Path $appcmd)) {
-        Write-Host "[*] IIS no encontrado. Instalando..." -ForegroundColor Yellow
-        # Lo instalamos de forma silenciosa para que no salgan errores rojos en pantalla si le faltan herramientas
-        Install-WindowsFeature -Name Web-Server -ErrorAction SilentlyContinue | Out-Null
+        Write-Host "[*] IIS no encontrado. Buscando disco de instalacion (ISO)..." -ForegroundColor Yellow
+        
+        # Buscar la unidad de CD/DVD automáticamente
+        $isoDrive = Get-Volume | Where-Object DriveType -eq 'CD-ROM' | Select-Object -ExpandProperty DriveLetter -ErrorAction SilentlyContinue
+        
+        if ($isoDrive) {
+            $sourcePath = "${isoDrive}:\sources\sxs"
+            if (Test-Path $sourcePath) {
+                Write-Host "[*] ISO encontrado en unidad ${isoDrive}:. Forzando instalacion..." -ForegroundColor Cyan
+                # Usamos DISM para forzar la instalacion usando el ISO
+                dism /online /enable-feature /featurename:IIS-WebServerRole /source:$sourcePath /limitaccess /all | Out-Null
+            } else {
+                Write-Host "[X] El disco esta montado, pero no tiene la carpeta \sources\sxs." -ForegroundColor Red
+                return
+            }
+        } else {
+            Write-Host "[X] No se detecto ningun disco (ISO) montado. Monta la ISO de Windows Server en VirtualBox e intenta de nuevo." -ForegroundColor Red
+            return
+        }
     }
     
-    # Verificamos de nuevo por si fallo la instalacion
     if (-not (Test-Path $appcmd)) {
-        Write-Host "[X] Error: IIS no se pudo instalar porque faltan archivos de origen. Instala con DISM primero." -ForegroundColor Red
+        Write-Host "[X] Error: Fallo la instalacion forzada de IIS. Revisa tu disco." -ForegroundColor Red
         return
     }
 
-    # 2. Aseguramos que el motor basico este prendido
+    Write-Host "[*] Configurando IIS a la vieja escuela (appcmd)..." -ForegroundColor Cyan
     Start-Service -Name W3SVC -ErrorAction SilentlyContinue
 
     $webRoot = "C:\inetpub\wwwroot\mi_sitio"
     Crear-Index -Ruta $webRoot -Servicio "IIS" -Version "Nativo Windows" -Puerto $puerto
     
-    # 3. Configurar el sitio web
     Write-Host "[*] Deteniendo sitio por defecto..." -ForegroundColor Yellow
     & $appcmd stop site /site.name:"Default Web Site" 2>$null | Out-Null
     
@@ -116,6 +129,7 @@ Function Instalar-IIS {
     Write-Host "[+] IIS configurado y activo en el puerto $puerto." -ForegroundColor Green
     Write-Host "[>] Abre en tu Host: http://${VM_IP}" -ForegroundColor Yellow
 }
+
 
 Function Desinstalar-IIS {
     Write-Host "`n[*] Desinstalando IIS..." -ForegroundColor Yellow
