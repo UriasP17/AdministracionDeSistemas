@@ -53,7 +53,6 @@ Function Instalar-Opcional {
 
     Write-Host "[*] Descargando e instalando $Servicio desde Chocolatey..." -ForegroundColor Cyan
     
-    # Instalacion forzada (Mostramos la salida en consola para ver si hay errores de red)
     if ($ver -eq "Latest") {
         choco install $paquete -y --force
     } else {
@@ -62,8 +61,15 @@ Function Instalar-Opcional {
 
     Write-Host "[*] Configurando puertos y archivos..." -ForegroundColor Yellow
     
-    # Agregamos todas las posibles rutas donde Chocolatey avienta los archivos
-    $rutasBusqueda = @("C:\tools", "C:\Apache24", "C:\ProgramData\chocolatey\lib\$paquete")
+    # Agregamos TODAS las posibles rutas donde Chocolatey lo instala, incluyendo el AppData rebelde
+    $rutasBusqueda = @(
+        "C:\tools", 
+        "C:\Apache24", 
+        "C:\ProgramData\chocolatey\lib\$paquete",
+        "$env:APPDATA\Apache24",
+        "$env:APPDATA\nginx",
+        $env:APPDATA
+    )
 
     if ($Servicio -eq "nginx") {
         $archivoConf = Get-ChildItem -Path $rutasBusqueda -Filter "nginx.conf" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -103,7 +109,9 @@ Function Instalar-Opcional {
             if (-not (Test-Path $htdocs)) { New-Item -ItemType Directory -Path $htdocs | Out-Null }
             "Servidor: Apache - Version: $ver - Puerto: $puerto" | Out-File (Join-Path $htdocs "index.html")
             
+            # Intentamos reiniciar con los dos posibles nombres del servicio
             Restart-Service -Name "Apache2.4" -ErrorAction SilentlyContinue
+            Restart-Service -Name "Apache" -ErrorAction SilentlyContinue
         } else {
             Write-Host "[X] Error: Apache no se configuro. No se encontro httpd.conf." -ForegroundColor Red
             return
@@ -126,15 +134,17 @@ Function Desinstalar-Opcional {
     }
     if ($Servicio -eq "apache") {
         Stop-Service -Name "Apache2.4" -ErrorAction SilentlyContinue
+        Stop-Service -Name "Apache" -ErrorAction SilentlyContinue
     }
 
     choco uninstall $paquete -y | Out-Null
     Remove-NetFirewallRule -DisplayName "HTTP-$Servicio" -ErrorAction SilentlyContinue
     
-    # Limpieza profunda de carpetas para evitar problemas en reinstalaciones
+    # Limpieza profunda en todas partes
     if (Test-Path "C:\tools\$paquete") { Remove-Item "C:\tools\$paquete" -Recurse -Force -ErrorAction SilentlyContinue }
     if (Test-Path "C:\tools\apache24") { Remove-Item "C:\tools\apache24" -Recurse -Force -ErrorAction SilentlyContinue }
     if (Test-Path "C:\Apache24") { Remove-Item "C:\Apache24" -Recurse -Force -ErrorAction SilentlyContinue }
+    if (Test-Path "$env:APPDATA\Apache24") { Remove-Item "$env:APPDATA\Apache24" -Recurse -Force -ErrorAction SilentlyContinue }
     if (Test-Path "C:\tools\nginx") { Remove-Item "C:\tools\nginx" -Recurse -Force -ErrorAction SilentlyContinue }
 
     Write-Host "[-] $Servicio desinstalado y limpio." -ForegroundColor Green
