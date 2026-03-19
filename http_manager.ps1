@@ -144,9 +144,17 @@ Function Instalar-Opcional {
         if ($archivoConf) {
             $conf = $archivoConf.FullName
             $apacheRoot = $archivoConf.Directory.Parent.FullName
+            
+            # Formatear la ruta al estilo de Apache (cambiar \ por /)
+            $apacheRootFormat = $apacheRoot -replace "\\", "/"
             $htdocs = Join-Path -Path $apacheRoot -ChildPath "htdocs"
 
+            # Arreglar los 3 problemas criticos de Apache en Windows:
+            # 1. El ServerRoot (Error 1 de Servicio)
+            (Get-Content $conf) -replace '^ServerRoot.*', "ServerRoot `"$apacheRootFormat`"" | Set-Content $conf
+            # 2. El Listen (El puerto)
             (Get-Content $conf) -replace "Listen 80", "Listen $puerto" | Set-Content $conf
+            # 3. El ServerName (Error de arranque)
             (Get-Content $conf) -replace "^ServerName.*", "" | Set-Content $conf
             Add-Content -Path $conf -Value "`nServerName localhost:$puerto"
             
@@ -156,15 +164,13 @@ Function Instalar-Opcional {
             if ($apacheExe) {
                 Write-Host "[*] Instalando y arrancando Apache como Servicio SSH..." -ForegroundColor Yellow
                 
-                # Desinstalar cualquier rastro de apache
                 & $apacheExe.FullName -k uninstall 2>$null
                 Start-Sleep -Seconds 1
                 
-                # Instalarlo en el sistema real
                 & $apacheExe.FullName -k install 2>$null
                 Start-Sleep -Seconds 1
                 
-                # Levantar el servicio usando comandos de red de Windows (Infalible en SSH)
+                # Levantar el servicio
                 net start Apache2.4
                 
             } else { Write-Host "[X] Error: No encontre httpd.exe" -ForegroundColor Red; return }
