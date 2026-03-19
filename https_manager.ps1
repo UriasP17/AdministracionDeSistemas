@@ -15,6 +15,9 @@ $TOMCAT_DIR   = "$BASE_DIR\Tomcat"
 $FZ_DIR       = "$BASE_DIR\FileZilla"
 $SSL_DIR      = "$BASE_DIR\SSL"
 
+# Forzar TLS 1.2 para que las descargas por HTTPS no truenen en Windows Server
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
 function Main {
     while ($true) {
         Write-Host "`n=========================================================="
@@ -268,21 +271,32 @@ function Instalar-Apache {
         if (-not (Descargar-Y-Validar "Apache" $Archivo)) { return }
         if (-not (Instalar-Paquete-Local $Archivo $APACHE_DIR)) { return }
     } else {
-        Write-Host "Descargando Apache... (bypass de ApacheLounge para SSH)"
-        # Descarga desde un link directo que no bloquea robots
-        $url = "https://github.com/moodle/moodle/releases/download/v3.0.0/httpd-2.4.46-win64-VS16.zip" 
+        Write-Host "Descargando Apache puro en formato ZIP..."
+        # Bypass a repositorios de GitHub confiables y sin bloqueo (moodle org o jmwebservices)
+        $url = "https://github.com/jmwebservices/httpd-2.4.63-win64-VS17/archive/refs/heads/main.zip" 
         try {
-            Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\apache.zip" -UseBasicParsing
-            New-Item -ItemType Directory -Force -Path $APACHE_DIR | Out-Null
-            Expand-Archive "$env:TEMP\apache.zip" -DestinationPath $APACHE_DIR -Force
+            Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\apache.zip" -UseBasicParsing -ErrorAction Stop
             
-            $sub = Get-ChildItem $APACHE_DIR -Directory | Select-Object -First 1
-            if ($sub) {
-                Get-ChildItem "$($sub.FullName)\*" | Move-Item -Destination $APACHE_DIR -Force -ErrorAction SilentlyContinue
-                Remove-Item $sub.FullName -Recurse -Force -ErrorAction SilentlyContinue
+            # Verificamos si realmente se descargó un ZIP midiendo el peso
+            $fileInfo = Get-Item "$env:TEMP\apache.zip"
+            if ($fileInfo.Length -lt 100000) { throw "El archivo descargado esta corrupto o es muy pequeno." }
+
+            New-Item -ItemType Directory -Force -Path $APACHE_DIR | Out-Null
+            Expand-Archive -Path "$env:TEMP\apache.zip" -DestinationPath $APACHE_DIR -Force
+            
+            # Mover archivos si se extrajeron dentro de una subcarpeta (ej: httpd-2.4.63-win64-VS17-main/Apache24)
+            $subMain = Get-ChildItem $APACHE_DIR -Directory | Select-Object -First 1
+            if ($subMain) {
+                $subApache24 = Get-ChildItem "$($subMain.FullName)" -Directory | Where-Object Name -like "*Apache24*" | Select-Object -First 1
+                if ($subApache24) {
+                    Get-ChildItem "$($subApache24.FullName)\*" | Move-Item -Destination $APACHE_DIR -Force -ErrorAction SilentlyContinue
+                } else {
+                    Get-ChildItem "$($subMain.FullName)\*" | Move-Item -Destination $APACHE_DIR -Force -ErrorAction SilentlyContinue
+                }
+                Remove-Item $subMain.FullName -Recurse -Force -ErrorAction SilentlyContinue
             }
         } catch {
-            Write-Host "Error descargando Apache. Asegurate de tener conexion a internet." -ForegroundColor Red
+            Write-Host "ERROR CRITICO descargando Apache: $($_.Exception.Message)" -ForegroundColor Red
             return
         }
     }
@@ -298,6 +312,8 @@ function Instalar-Apache {
     if (Test-Path $httpd_conf) {
         (Get-Content $httpd_conf) -replace '^Listen 80$',"Listen $puerto_http" | Set-Content $httpd_conf
         (Get-Content $httpd_conf) -replace 'SRVROOT ".*"',"SRVROOT `"$APACHE_DIR`"" | Set-Content $httpd_conf
+    } else {
+        Write-Host "ADVERTENCIA: No se encontro el archivo httpd.conf. La extraccion pudo haber fallado." -ForegroundColor Yellow
     }
 
     if ($SSL -eq "S") {
@@ -330,6 +346,8 @@ Listen $puerto_https
         & $httpd -k install -n "Apache2.4" 2>$null
         Start-Service "Apache2.4" -ErrorAction SilentlyContinue
         Set-Service  "Apache2.4" -StartupType Automatic -ErrorAction SilentlyContinue
+    } else {
+        Write-Host "ADVERTENCIA: No se pudo arrancar Apache. httpd.exe no encontrado en $APACHE_DIR\bin" -ForegroundColor Yellow
     }
 
     $script:RESUMEN_INSTALACIONES += "Apache  | SSL:$SSL | HTTP:$puerto_http  HTTPS:$puerto_https"
@@ -412,7 +430,6 @@ http {
     Abrir-Puerto-Firewall $puerto_http "Nginx-HTTP"
     $script:SERVICIOS_VERIFICAR += "Nginx|nginx|${puerto_http}|http"
 
-    # En SSH a veces Start-Process no jala si hay prompts, usamos cmd silencioso
     Start-Process -FilePath "cmd.exe" -ArgumentList "/c cd /d `"$NGINX_DIR`" && start nginx.exe" -WindowStyle Hidden
     
     $script:RESUMEN_INSTALACIONES += "Nginx   | SSL:$SSL | HTTP:$puerto_http  HTTPS:$puerto_https"
@@ -676,8 +693,7 @@ function Preparar-Repositorio-FTP {
     Invoke-WebRequest -Uri "https://nginx.org/download/nginx-1.26.2.zip" -OutFile "$base\Nginx\nginx-1.26.2.zip" -UseBasicParsing
     
     Write-Host " -> Apache..."
-    # Usando el link de Github directo que no falla en SSH
-    Invoke-WebRequest -Uri "https://github.com/moodle/moodle/releases/download/v3.0.0/httpd-2.4.46-win64-VS16.zip" -OutFile "$base\Apache\httpd-2.4.46-win64.zip" -UseBasicParsing
+    Invoke-WebRequest -Uri "https://github.com/jmwebservices/httpd-2.4.63-win64-VS17/archive/refs/heads/main.zip" -OutFile "$base\Apache\httpd-2.4.63-win64.zip" -UseBasicParsing
     
     Write-Host " -> Tomcat..."
     Invoke-WebRequest -Uri "https://dlcdn.apache.org/tomcat/tomcat-10/v10.1.30/bin/apache-tomcat-10.1.30-windows-x64.zip" -OutFile "$base\Tomcat\tomcat-10.1.30-win64.zip" -UseBasicParsing
