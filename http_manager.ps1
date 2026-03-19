@@ -53,7 +53,7 @@ Function Instalar-Opcional {
 
     Write-Host "[*] Descargando e instalando $Servicio desde Chocolatey..." -ForegroundColor Cyan
     
-    # Instalacion forzada sin busqueda previa para evitar el bloqueo
+    # Instalacion forzada
     if ($ver -eq "Latest") {
         choco install $paquete -y --force | Out-Null
     } else {
@@ -62,34 +62,56 @@ Function Instalar-Opcional {
 
     Write-Host "[*] Configurando puertos y archivos..." -ForegroundColor Yellow
     
+    # Buscamos rutas base comunes de Chocolatey
+    $rutasBusqueda = @("C:\tools", "C:\ProgramData\chocolatey\lib\$paquete")
+
     if ($Servicio -eq "nginx") {
-        $conf = "C:\tools\nginx\conf\nginx.conf"
-        if (Test-Path $conf) {
+        $archivoConf = Get-ChildItem -Path $rutasBusqueda -Filter "nginx.conf" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+        
+        if ($archivoConf) {
+            $conf = $archivoConf.FullName
+            $nginxRoot = $archivoConf.Directory.Parent.FullName
+            $htmlDir = Join-Path -Path $nginxRoot -ChildPath "html"
+
             (Get-Content $conf) -replace "listen\s+80;", "listen       $puerto;" | Set-Content $conf
-            "Servidor: Nginx - Version: $ver - Puerto: $puerto" | Out-File "C:\tools\nginx\html\index.html"
-            Start-Process "C:\tools\nginx\nginx.exe" -WorkingDirectory "C:\tools\nginx"
+            
+            if (-not (Test-Path $htmlDir)) { New-Item -ItemType Directory -Path $htmlDir | Out-Null }
+            "Servidor: Nginx - Version: $ver - Puerto: $puerto" | Out-File (Join-Path $htmlDir "index.html")
+            
+            $exeNginx = Join-Path -Path $nginxRoot -ChildPath "nginx.exe"
+            if (Test-Path $exeNginx) {
+                Start-Process $exeNginx -WorkingDirectory $nginxRoot
+            }
         } else {
-            Write-Host "[X] Error: Nginx no se configuro correctamente. Revisa tu conexion a internet." -ForegroundColor Red
+            Write-Host "[X] Error: Nginx no se configuro. No se encontro nginx.conf." -ForegroundColor Red
             return
         }
     }
 
     if ($Servicio -eq "apache") {
-        $conf = "C:\tools\apache24\conf\httpd.conf"
-        if (Test-Path $conf) {
+        $archivoConf = Get-ChildItem -Path $rutasBusqueda -Filter "httpd.conf" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+
+        if ($archivoConf) {
+            $conf = $archivoConf.FullName
+            $apacheRoot = $archivoConf.Directory.Parent.FullName
+            $htdocs = Join-Path -Path $apacheRoot -ChildPath "htdocs"
+
             (Get-Content $conf) -replace "Listen 80", "Listen $puerto" | Set-Content $conf
             (Get-Content $conf) -replace "ServerTokens Full", "ServerTokens Prod" | Set-Content $conf
             (Get-Content $conf) -replace "ServerSignature On", "ServerSignature Off" | Set-Content $conf
-            "Servidor: Apache - Version: $ver - Puerto: $puerto" | Out-File "C:\tools\apache24\htdocs\index.html"
+            
+            if (-not (Test-Path $htdocs)) { New-Item -ItemType Directory -Path $htdocs | Out-Null }
+            "Servidor: Apache - Version: $ver - Puerto: $puerto" | Out-File (Join-Path $htdocs "index.html")
+            
             Restart-Service -Name "Apache2.4" -ErrorAction SilentlyContinue
         } else {
-            Write-Host "[X] Error: Apache no se configuro correctamente. Revisa tu conexion a internet." -ForegroundColor Red
+            Write-Host "[X] Error: Apache no se configuro. No se encontro httpd.conf." -ForegroundColor Red
             return
         }
     }
 
     New-NetFirewallRule -DisplayName "HTTP-$Servicio" -LocalPort $puerto -Protocol TCP -Action Allow -ErrorAction SilentlyContinue | Out-Null
-    Write-Host "[+] $Servicio instalado correctamente en el puerto $puerto." -ForegroundColor Green
+    Write-Host "[+] $Servicio instalado y configurado correctamente en el puerto $puerto." -ForegroundColor Green
 }
 
 Function Desinstalar-Opcional {
@@ -109,13 +131,10 @@ Function Desinstalar-Opcional {
     choco uninstall $paquete -y | Out-Null
     Remove-NetFirewallRule -DisplayName "HTTP-$Servicio" -ErrorAction SilentlyContinue
     
-    # Limpiar las carpetas que deja Chocolatey para que no haya broncas si reinstalas
-    if ($Servicio -eq "apache" -and (Test-Path "C:\tools\apache24")) { 
-        Remove-Item "C:\tools\apache24" -Recurse -Force -ErrorAction SilentlyContinue 
-    }
-    if ($Servicio -eq "nginx" -and (Test-Path "C:\tools\nginx")) { 
-        Remove-Item "C:\tools\nginx" -Recurse -Force -ErrorAction SilentlyContinue 
-    }
+    # Limpieza general
+    if (Test-Path "C:\tools\$paquete") { Remove-Item "C:\tools\$paquete" -Recurse -Force -ErrorAction SilentlyContinue }
+    if (Test-Path "C:\tools\apache24") { Remove-Item "C:\tools\apache24" -Recurse -Force -ErrorAction SilentlyContinue }
+    if (Test-Path "C:\tools\nginx") { Remove-Item "C:\tools\nginx" -Recurse -Force -ErrorAction SilentlyContinue }
 
     Write-Host "[-] $Servicio desinstalado y limpio." -ForegroundColor Green
 }
