@@ -98,9 +98,9 @@ Function Instalar-IIS {
         # Eliminamos el sitio si ya existia de un intento anterior
         & $appcmd delete site /site.name:"MiSitioIIS" 2>$null | Out-Null
         
-        # Creamos el sitio apuntando a la carpeta con nuestro index
-        & $appcmd add site /name:"MiSitioIIS" /id:99 /physicalPath:"$webRoot" /bindings:"http/*:$puerto:" | Out-Null
-        & $appcmd start site /site.name:"MiSitioIIS" | Out-Null
+        # AQUI ESTA LA CORRECCION DE LA VARIABLE (se usa ${puerto})
+        & $appcmd add site /name:"MiSitioIIS" /id:99 /physicalPath:"$webRoot" /bindings:"http/*:${puerto}:" | Out-Null
+        & $appcmd start site /site.name:"MiSitioIIS" 2>$null | Out-Null
     } else {
         Write-Host "[X] Error: IIS no esta instalado correctamente en el sistema." -ForegroundColor Red
         return
@@ -111,7 +111,6 @@ Function Instalar-IIS {
     Write-Host "[+] IIS configurado y activo en el puerto $puerto." -ForegroundColor Green
     Write-Host "[>] Abre en tu Host: http://${VM_IP}" -ForegroundColor Yellow
 }
-
 Function Desinstalar-IIS {
     Write-Host "`n[*] Desinstalando IIS..." -ForegroundColor Yellow
     
