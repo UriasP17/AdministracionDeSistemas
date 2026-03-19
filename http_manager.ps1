@@ -187,7 +187,6 @@ Function Instalar-Opcional {
     Write-Host "[*] Instalando $paquete via Chocolatey..." -ForegroundColor Cyan
     Write-Host "============= LOG DE CHOCOLATEY (EN VIVO) =============" -ForegroundColor DarkGray
     
-    # AQUI LE QUITAMOS LA VENDA: Ya no hay "Out-Null", ahora veremos qué hace choco
     if ($Servicio -eq "nginx") {
         choco install $paquete -y --force --package-parameters "/port:$puerto"
     } else {
@@ -198,9 +197,17 @@ Function Instalar-Opcional {
     Write-Host "[*] Buscando configuracion de $Servicio (Esperando disco duro)..." -ForegroundColor Yellow
 
     $archivoConf = $null
-    $rutasBusqueda = @("C:\tools", "C:\ProgramData\chocolatey\lib", "C:\nginx", "C:\Apache24")
+    # ======= FIX DEFINITIVO: AGREGAMOS LAS RUTAS RARAS DE APPDATA =======
+    $rutasBusqueda = @(
+        "C:\tools", 
+        "C:\ProgramData\chocolatey\lib", 
+        "C:\nginx", 
+        "C:\Apache24",
+        $env:APPDATA,
+        "$env:USERPROFILE\AppData\Roaming",
+        "$env:USERPROFILE\AppData\Local"
+    )
     
-    # BUCLE TIPO RADAR: Busca cada 2 segundos por un maximo de 40 segundos
     $intentos = 0
     while ($null -eq $archivoConf -and $intentos -lt 20) {
         foreach ($ruta in $rutasBusqueda) {
@@ -218,7 +225,7 @@ Function Instalar-Opcional {
             Write-Host "." -NoNewline -ForegroundColor Cyan
         }
     }
-    Write-Host "" # Salto de linea
+    Write-Host "" 
 
     if ($Servicio -eq "nginx") {
         if ($archivoConf) {
@@ -239,7 +246,7 @@ Function Instalar-Opcional {
             if ($exeNginx) {
                 Start-Process $exeNginx.FullName -WorkingDirectory $exeNginx.Directory.FullName -WindowStyle Hidden
             } else { Write-Host "[-] Error: nginx.exe no encontrado." -ForegroundColor Red; return }
-        } else { Write-Host "[-] Error: nginx.conf no encontrado. Revisa el log de Chocolatey arriba para ver por que fallo." -ForegroundColor Red; return }
+        } else { Write-Host "[-] Error: nginx.conf no encontrado. Revisa el log de Chocolatey arriba." -ForegroundColor Red; return }
     }
 
     if ($Servicio -eq "apache") {
@@ -271,7 +278,7 @@ Function Instalar-Opcional {
                 net start Apache2.4 | Out-Null
                 
             } else { Write-Host "[-] Error: httpd.exe no encontrado." -ForegroundColor Red; return }
-        } else { Write-Host "[-] Error: httpd.conf no encontrado. Revisa el log de Chocolatey arriba para ver por que fallo." -ForegroundColor Red; return }
+        } else { Write-Host "[-] Error: httpd.conf no encontrado a pesar de buscar en AppData." -ForegroundColor Red; return }
     }
 
     Configurar-Firewall -Puerto $puerto -Nombre $Servicio
@@ -281,35 +288,41 @@ Function Instalar-Opcional {
 
 
 
+
 Function Desinstalar-Opcional {
     param($Servicio)
     $paquete = if ($Servicio -eq "apache") { "apache-httpd" } else { "nginx" }
     
     Write-Host "`n[*] Desinstalando $Servicio y liberando puerto..." -ForegroundColor Yellow
     
-    # Matar procesos agresivamente para soltar el puerto
     if ($Servicio -eq "nginx") { 
         Get-Process -Name "nginx" -ErrorAction SilentlyContinue | Stop-Process -Force 
     }
     if ($Servicio -eq "apache") { 
         net stop Apache2.4 2>$null
-        $apacheExe = Get-ChildItem -Path "C:\tools" -Filter "httpd.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+        # Buscamos el exe en appdata tambien
+        $apacheExe = Get-ChildItem -Path "$env:APPDATA", "C:\tools" -Filter "httpd.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($apacheExe) { & $apacheExe.FullName -k uninstall 2>$null }
         Get-Process -Name "httpd" -ErrorAction SilentlyContinue | Stop-Process -Force 
     }
 
     choco uninstall $paquete -y | Out-Null
     
-    # Limpiar firewall para reusar puerto
     Get-NetFirewallRule -DisplayName "HTTP-$Servicio-*" -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
     
-    # Borrar archivos
-    Get-ChildItem -Path "C:\tools" -Filter "*$paquete*" -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-    if ($Servicio -eq "apache") { Get-ChildItem -Path "C:\tools" -Filter "*apache24*" -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue }
-    if ($Servicio -eq "nginx") { Get-ChildItem -Path "C:\tools" -Filter "*nginx*" -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue }
+    # Limpieza profunda en tools y en AppData
+    @("C:\tools", "$env:APPDATA") | ForEach-Object {
+        $ruta = $_
+        if (Test-Path $ruta) {
+            Get-ChildItem -Path $ruta -Filter "*$paquete*" -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+            if ($Servicio -eq "apache") { Get-ChildItem -Path $ruta -Filter "*apache24*" -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue }
+            if ($Servicio -eq "nginx") { Get-ChildItem -Path $ruta -Filter "*nginx*" -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue }
+        }
+    }
 
     Write-Host "[-] $Servicio desinstalado. Puerto liberado." -ForegroundColor Green
 }
+
 
 do {
     Write-Host "`n=== MENU WINDOWS SERVER ===" -ForegroundColor Cyan
