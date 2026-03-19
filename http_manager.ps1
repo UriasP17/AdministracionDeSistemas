@@ -40,6 +40,7 @@ function Crear-Index {
     param([string]$Ruta, [string]$Servicio, [string]$Version, [int]$Puerto)
     if (!(Test-Path $Ruta)) { New-Item -Path $Ruta -ItemType Directory -Force | Out-Null }
     
+    # ======== AQUI ESTA EL NUEVO DISENO MODO OSCURO ========
     $html = @"
 <!DOCTYPE html>
 <html lang="es">
@@ -47,19 +48,59 @@ function Crear-Index {
   <meta charset="UTF-8">
   <title>$Servicio - Puerto $Puerto</title>
   <style>
-    body { font-family: Arial, sans-serif; background-color: #f4f4f9; color: #333; text-align: center; padding: 50px; }
-    .container { background: white; padding: 30px; border-radius: 10px; box-shadow: 0px 0px 10px rgba(0,0,0,0.1); display: inline-block; }
-    h1 { color: #0078D7; }
+    body { 
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+        background-color: #1e1e2e; 
+        color: #e0e0e0; 
+        text-align: center; 
+        padding: 50px; 
+        margin: 0;
+    }
+    .container { 
+        background: #282a36; 
+        padding: 40px; 
+        border-radius: 12px; 
+        box-shadow: 0px 0px 20px rgba(0, 120, 215, 0.4); 
+        display: inline-block; 
+        border: 1px solid #44475a;
+        min-width: 350px;
+    }
+    h1 { 
+        color: #00e676; 
+        margin-top: 0;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        text-shadow: 0 0 10px rgba(0, 230, 118, 0.3);
+    }
+    p {
+        font-size: 1.1em;
+        line-height: 1.6;
+        margin: 10px 0;
+    }
+    strong {
+        color: #8be9fd;
+    }
+    .url-box {
+        background: #1e1e2e;
+        padding: 10px;
+        border-radius: 6px;
+        margin-top: 20px;
+        font-family: monospace;
+        color: #ff79c6;
+        border: 1px dashed #6272a4;
+    }
   </style>
 </head>
 <body>
   <div class="container">
       <h1>¡Servidor Activo!</h1>
       <p><strong>Servidor:</strong> $Servicio</p>
-      <p><strong>Version:</strong> $Version</p>
+      <p><strong>Versión:</strong> $Version</p>
       <p><strong>Puerto:</strong> $Puerto</p>
       <p><strong>IP VirtualBox:</strong> $VM_IP</p>
-      <p>URL: http://${VM_IP}:${Puerto}</p>
+      <div class="url-box">
+          URL: http://${VM_IP}:${Puerto}
+      </div>
   </div>
 </body>
 </html>
@@ -77,14 +118,12 @@ function Configurar-Firewall {
 Function Instalar-IIS {
     Write-Host "`n[*] Configurando servidor HTTP Nativo de Windows..." -ForegroundColor Cyan
     
-    # AQUI ESTA EL CAMBIO: Ya te pide el puerto en lugar de forzar el 80
     $puerto = Solicitar-Puerto -ServicioNombre "IIS Nativo"
     
     $webRoot = "C:\inetpub\wwwroot\mi_sitio"
     Crear-Index -Ruta $webRoot -Servicio "Windows HTTP Nativo" -Version "System.Net" -Puerto $puerto
     Configurar-Firewall -Puerto $puerto -Nombre "HTTP-Nativo"
     
-    # Etiquetamos el proceso para saber a quien matar despues sin romper el SSH
     $codigoServidor = @"
 try {
 `$host.ui.RawUI.WindowTitle = 'ServidorNativoIIS'
@@ -110,12 +149,8 @@ while (`$listener.IsListening) {
 
 Function Desinstalar-IIS {
     Write-Host "`n[*] Desinstalando IIS..." -ForegroundColor Yellow
-    # Solo matamos el powershell que creamos nosotros, no el que maneja el SSH
     Get-Process -Name "powershell" -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -eq "ServidorNativoIIS" } | Stop-Process -Force
-    
-    # AQUI EL OTRO CAMBIO: Borramos la regla sin importar qué puerto usaste
     Get-NetFirewallRule -DisplayName "HTTP-HTTP-Nativo-*" -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
-    
     Write-Host "[-] Sitio HTTP Nativo apagado." -ForegroundColor Green
 }
 
@@ -220,7 +255,6 @@ Function Desinstalar-Opcional {
     
     Write-Host "`n[*] Desinstalando $Servicio..." -ForegroundColor Yellow
     if ($Servicio -eq "nginx") { 
-        # Matar procesos hijos de Nginx sin tocar la consola madre
         Get-Process -Name "nginx" -ErrorAction SilentlyContinue | Stop-Process -Force 
     }
     if ($Servicio -eq "apache") { 
@@ -230,12 +264,10 @@ Function Desinstalar-Opcional {
         Get-Process -Name "httpd" -ErrorAction SilentlyContinue | Stop-Process -Force 
     }
 
-    # Desinstalamos suavemente
     choco uninstall $paquete -y | Out-Null
     
     Get-NetFirewallRule -DisplayName "HTTP-$Servicio-*" -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
     
-    # Limpiamos basuras de choco
     Get-ChildItem -Path "C:\tools" -Filter "*$paquete*" -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     if ($Servicio -eq "apache") { Get-ChildItem -Path "C:\tools" -Filter "*apache24*" -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue }
     if ($Servicio -eq "nginx") { Get-ChildItem -Path "C:\tools" -Filter "*nginx*" -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue }
