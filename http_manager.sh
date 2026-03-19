@@ -4,13 +4,22 @@
 # SCRIPT DE GESTION DE SERVIDORES WEB (FEDORA)
 # ==========================================
 
-# Tu IP de VirtualBox (puedes cambiarla si no es esta en Fedora)
-VM_IP=$(hostname -I | awk '{print $1}')
-
 if [ "$EUID" -ne 0 ]; then
     echo "[!] Ejecuta el script con sudo."
     sleep 4
     exit 1
+fi
+
+# ==========================================
+# DETECTAR IP DEL ADAPTADOR PUENTE (.20)
+# ==========================================
+# Busca cualquier IP que termine en .20 o que esté en la subred 192.168.56.
+VM_IP=$(ip -4 addr show | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | grep -E '\.20$|^192\.168\.56\.' | head -n 1)
+
+# Si no la encuentra en automático, te la pide a mano para no regarla
+if [ -z "$VM_IP" ]; then
+    echo -e "\e[33m[!] No se detecto automaticamente la IP de la 3era red (.20).\e[0m"
+    read -p "Ingresa tu IP puente manualmente (ej. 192.168.56.20): " VM_IP
 fi
 
 instalar_dependencias_base() {
@@ -96,7 +105,6 @@ instalar_apache() {
     
     crear_index "$vhost_dir" "Apache (httpd)" "$version" "$puerto"
     
-    # Permisos de SELinux para el puerto
     if command -v semanage &>/dev/null; then
         semanage port -a -t http_port_t -p tcp "$puerto" 2>/dev/null || \
         semanage port -m -t http_port_t -p tcp "$puerto" 2>/dev/null
@@ -123,9 +131,10 @@ instalar_nginx() {
     local version=$(rpm -q nginx --queryformat "%{version}")
     local vhost_dir="/usr/share/nginx/html"
     
-    # Cambiar el puerto en el archivo de conf default de Fedora
-    sed -i "s/listen       80;/listen       $puerto;/" /etc/nginx/nginx.conf
-    sed -i "s/listen       \[::\]:80;/listen       \[::\]:$puerto;/" /etc/nginx/nginx.conf
+    # ======= FIX PARA NGINX Y LA RED PUENTE =======
+    # Forzamos a Nginx a escuchar especificamente en la IP puente y no en la NAT
+    sed -i "s/listen       80;/listen       ${VM_IP}:${puerto};/" /etc/nginx/nginx.conf
+    sed -i "s/listen       \[::\]:80;/#listen       \[::\]:80;/" /etc/nginx/nginx.conf
     
     crear_index "$vhost_dir" "Nginx" "$version" "$puerto"
     
