@@ -3,7 +3,7 @@
 # ====================================================================
 # VARIABLES GLOBALES
 # ====================================================================
-# PON LA IP DE TU FEDORA AQUI (De donde va a bajar los .zip)
+# PON LA IP DE TU FEDORA AQUI (De donde va a bajar los .zip si usas FTP)
 $FTP_SERVER   = "192.168.56.20" 
 $FTP_USER     = "repositorio"
 $FTP_PASS     = "Hola1234."
@@ -12,8 +12,8 @@ $FTP_BASE     = "http/Windows"
 # Tu IP de Windows donde estas corriendo esto
 $IP_WINDOWS   = "192.168.56.10"
 
-$RESUMEN_INSTALACIONES = @()
-$SERVICIOS_VERIFICAR   = @()
+$script:RESUMEN_INSTALACIONES = @()
+$script:SERVICIOS_VERIFICAR   = @()
 
 $BASE_DIR     = "C:\Servicios"
 $APACHE_DIR   = "$BASE_DIR\Apache"
@@ -153,7 +153,7 @@ function Instalar-IIS {
     Crear-Index "IIS Windows Server" $IIS_DIR
     New-Item -ItemType Directory -Force -Path $IIS_REDIR | Out-Null
 
-    if ($SSL -eq "S") {
+    if ($SSL -eq "S" -or $SSL -eq "s") {
         Write-Host "Configurando HTTPS, Redireccion automatica y HSTS..."
         $thumb = Generar-SSL-Nativo "IIS-Web"
         
@@ -165,9 +165,9 @@ function Instalar-IIS {
         & $appcmd add site /name:"Practica7_IIS_HTTPS" /bindings:https://*:${p_https} /physicalPath:"$IIS_DIR"
         & $appcmd set config "Practica7_IIS_HTTPS" /section:system.webServer/httpProtocol /+customHeaders.[name='Strict-Transport-Security',value='max-age=31536000; includeSubDomains'] /commit:apphost
 
-        # HTTP Redireccion (Redirige a la IP o al Dominio)
+        # HTTP Redireccion (AQUI ESTA LA FIX DEL VARIABLE PARSER)
         & $appcmd add site /name:"Practica7_IIS_HTTP" /bindings:http://*:${p_http} /physicalPath:"$IIS_REDIR"
-        & $appcmd set config "Practica7_IIS_HTTP" /section:system.webServer/httpRedirect /enabled:true /destination:"https://$IP_WINDOWS:$p_https" /exactDestination:false /httpResponseStatus:Permanent /commit:apphost
+        & $appcmd set config "Practica7_IIS_HTTP" /section:system.webServer/httpRedirect /enabled:true /destination:"https://${IP_WINDOWS}:$p_https" /exactDestination:false /httpResponseStatus:Permanent /commit:apphost
         
         Abrir-Puerto $p_https "IIS-HTTPS"
         $script:SERVICIOS_VERIFICAR += "IIS-HTTPS|W3SVC|$p_https|https"
@@ -193,7 +193,7 @@ function Instalar-Apache {
         if (-not (Descargar-Y-Validar "Apache" $Archivo)) { return }
         Extraer-Instalador $Archivo $APACHE_DIR
     } else {
-        Write-Host "Descargando Apache oficial..."
+        Write-Host "Descargando Apache oficial (Web)..."
         & curl.exe -s -L -o "$env:TEMP\apache.zip" "https://github.com/jmwebservices/httpd-2.4.63-win64-VS17/archive/refs/heads/main.zip"
         Extraer-Instalador "apache.zip" $APACHE_DIR
     }
@@ -206,7 +206,7 @@ function Instalar-Apache {
     (Get-Content $conf) -replace '#LoadModule rewrite_module','LoadModule rewrite_module' | Set-Content $conf
     (Get-Content $conf) -replace '#LoadModule headers_module','LoadModule headers_module' | Set-Content $conf
 
-    if ($SSL -eq "S") {
+    if ($SSL -eq "S" -or $SSL -eq "s") {
         $cert_dir = Generar-SSL-App "Apache"
         (Get-Content $conf) -replace '#LoadModule ssl_module','LoadModule ssl_module' | Set-Content $conf
         
@@ -257,14 +257,14 @@ function Instalar-Nginx {
         if (-not (Descargar-Y-Validar "Nginx" $Archivo)) { return }
         Extraer-Instalador $Archivo $NGINX_DIR
     } else {
-        Write-Host "Descargando Nginx..."
+        Write-Host "Descargando Nginx oficial (Web)..."
         & curl.exe -s -L -o "$env:TEMP\nginx.zip" "https://nginx.org/download/nginx-1.26.2.zip"
         Extraer-Instalador "nginx.zip" $NGINX_DIR
     }
 
     Crear-Index "Nginx Windows" "$NGINX_DIR\html"
 
-    if ($SSL -eq "S") {
+    if ($SSL -eq "S" -or $SSL -eq "s") {
         $cert_dir = Generar-SSL-App "Nginx"
         $conf = @"
 worker_processes 1;
@@ -302,7 +302,7 @@ http {
 }
 
 # ====================================================================
-# SERVICIO 4: IIS FTP (NATVO CON FTPS Y APPCMD)
+# SERVICIO 4: IIS FTP (NATIVO CON FTPS Y APPCMD)
 # ====================================================================
 function Instalar-IISFTP {
     param($SSL)
@@ -321,8 +321,8 @@ function Instalar-IISFTP {
 
     & $appcmd add site /name:"Practica7_IIS_FTP" /bindings:ftp://*:${p_ftp} /physicalPath:"$ftp_root"
 
-    if ($SSL -eq "S") {
-        Write-Host "Configurando FTPS (Túnel SSL)..."
+    if ($SSL -eq "S" -or $SSL -eq "s") {
+        Write-Host "Configurando FTPS (Tunel SSL)..."
         $thumb = Generar-SSL-Nativo "IIS-FTP"
         
         & $appcmd set config "Practica7_IIS_FTP" /section:system.applicationHost/sites "/[name='Practica7_IIS_FTP'].ftpServer.security.ssl.controlChannelPolicy:Require" /commit:apphost
@@ -343,7 +343,7 @@ function Instalar-IISFTP {
 }
 
 # ====================================================================
-# VERIFICACIÓN
+# VERIFICACION
 # ====================================================================
 function Verificar-HTTP {
     param($Nombre, $Servicio, $Puerto, $Proto)
@@ -351,7 +351,8 @@ function Verificar-HTTP {
     
     try {
         [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
-        $r = Invoke-WebRequest "${Proto}://$IP_WINDOWS:${Puerto}" -UseBasicParsing -TimeoutSec 3 -ErrorAction Stop
+        # AQUI ESTA LA OTRA FIX DEL VARIABLE PARSER
+        $r = Invoke-WebRequest "${Proto}://${IP_WINDOWS}:${Puerto}" -UseBasicParsing -TimeoutSec 3 -ErrorAction Stop
         $resp = $r.StatusCode
         $hsts = if ($r.Headers["Strict-Transport-Security"]) {"HSTS: OK"} else {""}
     } catch {
@@ -377,7 +378,11 @@ function Mostrar-Resumen {
     Write-Host "`n=========================================================="
     Write-Host "         RESUMEN DE INFRAESTRUCTURA (RUBRICA P7)         "
     Write-Host "=========================================================="
-    foreach ($r in $script:RESUMEN_INSTALACIONES) { Write-Host "  -> $r" }
+    if ($script:RESUMEN_INSTALACIONES.Count -eq 0) {
+        Write-Host "  No se ha instalado nada en esta sesion."
+    } else {
+        foreach ($r in $script:RESUMEN_INSTALACIONES) { Write-Host "  -> $r" }
+    }
 
     Write-Host "`n-- Verificacion Activa de Instancias ----------------------"
     foreach ($e in $script:SERVICIOS_VERIFICAR) {
@@ -389,5 +394,9 @@ function Mostrar-Resumen {
     Read-Host "Presiona Enter para continuar"
 }
 
-# Ejecutar el Menú
-Main
+# ====================================================================
+# FUNCION PRINCIPAL (MENU)
+# ====================================================================
+function Main {
+    while ($true) {
+        Write-Host "`n===
