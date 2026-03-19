@@ -75,8 +75,10 @@ function Configurar-Firewall {
 }
 
 Function Instalar-IIS {
-    $puerto = 80
     Write-Host "`n[*] Configurando servidor HTTP Nativo de Windows..." -ForegroundColor Cyan
+    
+    # AQUI ESTA EL CAMBIO: Ya te pide el puerto en lugar de forzar el 80
+    $puerto = Solicitar-Puerto -ServicioNombre "IIS Nativo"
     
     $webRoot = "C:\inetpub\wwwroot\mi_sitio"
     Crear-Index -Ruta $webRoot -Servicio "Windows HTTP Nativo" -Version "System.Net" -Puerto $puerto
@@ -103,14 +105,17 @@ while (`$listener.IsListening) {
 
     Start-Process powershell.exe -ArgumentList "-WindowStyle Hidden -NoProfile -Command `"$codigoServidor`""
     Write-Host "[+] Servidor Web Nativo activo en el puerto $puerto." -ForegroundColor Green
-    Write-Host "[>] Abre en tu Host: http://${VM_IP}" -ForegroundColor Yellow
+    Write-Host "[>] Abre en tu Host: http://${VM_IP}:${puerto}" -ForegroundColor Yellow
 }
 
 Function Desinstalar-IIS {
     Write-Host "`n[*] Desinstalando IIS..." -ForegroundColor Yellow
     # Solo matamos el powershell que creamos nosotros, no el que maneja el SSH
     Get-Process -Name "powershell" -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -eq "ServidorNativoIIS" } | Stop-Process -Force
-    Remove-NetFirewallRule -DisplayName "HTTP-HTTP-Nativo-80" -ErrorAction SilentlyContinue
+    
+    # AQUI EL OTRO CAMBIO: Borramos la regla sin importar qué puerto usaste
+    Get-NetFirewallRule -DisplayName "HTTP-HTTP-Nativo-*" -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
+    
     Write-Host "[-] Sitio HTTP Nativo apagado." -ForegroundColor Green
 }
 
