@@ -224,7 +224,7 @@ function Crear-Estructura-Base {
 
 function Opcion-Instalar-FTP {
     Escribir-Titulo "Instalar y configurar servidor FTP"
-    Escribir-Info "Instalando componentes IIS mediante DISM (Bypass error 0x800f081f)..."
+    Escribir-Info "Instalando componentes IIS mediante DISM..."
     Desactivar-ComplejidadPassword
     
     dism.exe /Online /Enable-Feature /FeatureName:IIS-WebServerRole /All /NoRestart | Out-Null
@@ -234,44 +234,40 @@ function Opcion-Instalar-FTP {
     
     Escribir-Exito "Componentes instalados."
     
-    Escribir-Info "Forzando carga del modulo IIS..."
+    Escribir-Info "Iniciando servicios base..."
     Start-Service -Name "WAS" -ErrorAction SilentlyContinue
     Start-Service -Name "W3SVC" -ErrorAction SilentlyContinue
-    
-    Import-Module WebAdministration -Force -ErrorAction SilentlyContinue
-    
-    $intentos = 0
-    while (-not (Test-Path "IIS:\") -and $intentos -lt 10) {
-        Start-Sleep -Seconds 2
-        Import-Module WebAdministration -Force -ErrorAction SilentlyContinue
-        $intentos++
-    }
-    
-    if (-not (Test-Path "IIS:\")) {
-        Escribir-ErrorMsg "El modulo WebAdministration no se cargo correctamente. Intenta reiniciar la sesion SSH."
-        return
-    }
+    Start-Service -Name "FTPSVC" -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 3
 
-    Escribir-Info "Configurando sitio y permisos..."
-    if (Get-WebSite -Name $ftpSiteName -ErrorAction SilentlyContinue) {
-        Stop-Service -Name "W3SVC", "FTPSVC" -Force -ErrorAction SilentlyContinue
-        Remove-WebSite -Name $ftpSiteName
-        if (Test-Path $FTP_ROOT) { Remove-Item $FTP_ROOT -Recurse -Force }
-        if (Test-Path $FTP_ANON) { Remove-Item $FTP_ANON -Recurse -Force }
-    }
+    Escribir-Info "Configurando sitio FTP usando appcmd nativo..."
+    $appcmd = "$env:SystemRoot\System32\inetsrv\appcmd.exe"
+    
+    # Detener y eliminar el sitio si ya existe
+    & $appcmd stop site /site.name:"$ftpSiteName" 2>$null
+    & $appcmd delete site /site.name:"$ftpSiteName" 2>$null
+
+    if (Test-Path $FTP_ROOT) { Remove-Item $FTP_ROOT -Recurse -Force -ErrorAction SilentlyContinue }
+    if (Test-Path $FTP_ANON) { Remove-Item $FTP_ANON -Recurse -Force -ErrorAction SilentlyContinue }
 
     Crear-Estructura-Base
-    Start-Service -Name "W3SVC" -ErrorAction SilentlyContinue
-    New-WebFtpSite -Name $ftpSiteName -Port 21 -PhysicalPath $FTP_ANON | Out-Null
 
-    Set-ItemProperty "IIS:\Sites\$ftpSiteName" -Name ftpServer.security.ssl.controlChannelPolicy -Value 0
-    Set-ItemProperty "IIS:\Sites\$ftpSiteName" -Name ftpServer.security.ssl.dataChannelPolicy -Value 0
-    Set-ItemProperty "IIS:\Sites\$ftpSiteName" -Name ftpServer.security.authentication.anonymousAuthentication.enabled -Value $true
-    Set-ItemProperty "IIS:\Sites\$ftpSiteName" -Name ftpServer.security.authentication.anonymousAuthentication.userName -Value "IUSR"
-    Set-ItemProperty "IIS:\Sites\$ftpSiteName" -Name ftpServer.security.authentication.basicAuthentication.enabled -Value $true
-
-    Set-FtpUserIsolation -SiteName $ftpSiteName -Mode "IsolateAllDirectories"
+    # Crear el sitio FTP
+    & $appcmd add site /name:"$ftpSiteName" /bindings:ftp://*:21 /physicalPath:"$FTP_ANON" 2>$null
     
+    # Iniciar el sitio
+    & $appcmd start site /site.name:"$ftpSiteName" 2>$null
+
+    # Configurar propiedades de seguridad
+    & $appcmd set config "$ftpSiteName" /section:system.applicationHost/sites "/[name='$ftpSiteName'].ftpServer.security.ssl.controlChannelPolicy:None" /commit:apphost 2>$null
+    & $appcmd set config "$ftpSiteName" /section:system.applicationHost/sites "/[name='$ftpSiteName'].ftpServer.security.ssl.dataChannelPolicy:None" /commit:apphost 2>$null
+    & $appcmd set config "$ftpSiteName" /section:system.applicationHost/sites "/[name='$ftpSiteName'].ftpServer.security.authentication.anonymousAuthentication.enabled:True" /commit:apphost 2>$null
+    & $appcmd set config "$ftpSiteName" /section:system.applicationHost/sites "/[name='$ftpSiteName'].ftpServer.security.authentication.basicAuthentication.enabled:True" /commit:apphost 2>$null
+    
+    # Aislar usuarios
+    & $appcmd set config "$ftpSiteName" /section:system.applicationHost/sites "/[name='$ftpSiteName'].ftpServer.userIsolation.mode:IsolateAllDirectories" /commit:apphost 2>$null
+
+    # Aplicar reglas de autorizacion
     try {
         Set-FtpAuthRules -SiteName $ftpSiteName -Rules @(
             @{ users = "?"; roles = ""; permissions = "Read" },
@@ -288,6 +284,7 @@ function Opcion-Instalar-FTP {
     Start-Service -Name "FTPSVC" -ErrorAction SilentlyContinue
     Escribir-Exito "Servidor FTP configurado y en ejecucion."
 }
+
 
 function Opcion-Crear-Usuarios {
     Escribir-Titulo "Crear Usuarios"
