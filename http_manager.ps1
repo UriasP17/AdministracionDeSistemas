@@ -41,7 +41,7 @@ Function Instalar-Opcional {
         $ver = "Latest"
     }
 
-    $puerto = Read-Host "Ingresa puerto para $Servicio (ej. 8080)"
+    $puerto = Read-Host "Ingresa puerto para $Servicio (ej. 8080 o 81)"
     if ([string]::IsNullOrWhiteSpace($puerto)) { $puerto = 8080 }
 
     # Verificar si el puerto ya se está usando
@@ -53,17 +53,17 @@ Function Instalar-Opcional {
 
     Write-Host "[*] Descargando e instalando $Servicio desde Chocolatey..." -ForegroundColor Cyan
     
-    # Instalacion forzada
+    # Instalacion forzada (Mostramos la salida en consola para ver si hay errores de red)
     if ($ver -eq "Latest") {
-        choco install $paquete -y --force | Out-Null
+        choco install $paquete -y --force
     } else {
-        choco install $paquete --version $ver -y --force | Out-Null
+        choco install $paquete --version $ver -y --force
     }
 
     Write-Host "[*] Configurando puertos y archivos..." -ForegroundColor Yellow
     
-    # Buscamos rutas base comunes de Chocolatey
-    $rutasBusqueda = @("C:\tools", "C:\ProgramData\chocolatey\lib\$paquete")
+    # Agregamos todas las posibles rutas donde Chocolatey avienta los archivos
+    $rutasBusqueda = @("C:\tools", "C:\Apache24", "C:\ProgramData\chocolatey\lib\$paquete")
 
     if ($Servicio -eq "nginx") {
         $archivoConf = Get-ChildItem -Path $rutasBusqueda -Filter "nginx.conf" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -131,9 +131,10 @@ Function Desinstalar-Opcional {
     choco uninstall $paquete -y | Out-Null
     Remove-NetFirewallRule -DisplayName "HTTP-$Servicio" -ErrorAction SilentlyContinue
     
-    # Limpieza general
+    # Limpieza profunda de carpetas para evitar problemas en reinstalaciones
     if (Test-Path "C:\tools\$paquete") { Remove-Item "C:\tools\$paquete" -Recurse -Force -ErrorAction SilentlyContinue }
     if (Test-Path "C:\tools\apache24") { Remove-Item "C:\tools\apache24" -Recurse -Force -ErrorAction SilentlyContinue }
+    if (Test-Path "C:\Apache24") { Remove-Item "C:\Apache24" -Recurse -Force -ErrorAction SilentlyContinue }
     if (Test-Path "C:\tools\nginx") { Remove-Item "C:\tools\nginx" -Recurse -Force -ErrorAction SilentlyContinue }
 
     Write-Host "[-] $Servicio desinstalado y limpio." -ForegroundColor Green
