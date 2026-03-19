@@ -82,8 +82,10 @@ Function Instalar-IIS {
     Crear-Index -Ruta $webRoot -Servicio "Windows HTTP Nativo" -Version "System.Net" -Puerto $puerto
     Configurar-Firewall -Puerto $puerto -Nombre "HTTP-Nativo"
     
+    # Etiquetamos el proceso para saber a quien matar despues sin romper el SSH
     $codigoServidor = @"
 try {
+`$host.ui.RawUI.WindowTitle = 'ServidorNativoIIS'
 `$listener = New-Object System.Net.HttpListener
 `$listener.Prefixes.Add('http://*:$puerto/')
 `$listener.Start()
@@ -106,7 +108,8 @@ while (`$listener.IsListening) {
 
 Function Desinstalar-IIS {
     Write-Host "`n[*] Desinstalando IIS..." -ForegroundColor Yellow
-    Stop-Process -Name "powershell" -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -eq "" }
+    # Solo matamos el powershell que creamos nosotros, no el que maneja el SSH
+    Get-Process -Name "powershell" -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -eq "ServidorNativoIIS" } | Stop-Process -Force
     Remove-NetFirewallRule -DisplayName "HTTP-HTTP-Nativo-80" -ErrorAction SilentlyContinue
     Write-Host "[-] Sitio HTTP Nativo apagado." -ForegroundColor Green
 }
@@ -122,7 +125,6 @@ Function Instalar-Opcional {
 
     Write-Host "[*] Instalando $Servicio ($ver) desde Chocolatey (esto puede tardar un poco)..." -ForegroundColor Cyan
     
-    # === AQUI LE TAPAMOS LA BOCA A CHOCO OTRA VEZ (Out-Null) ===
     if ($Servicio -eq "nginx") {
         choco install $paquete -y --force --package-parameters "/port:$puerto" | Out-Null
     } else {
@@ -212,18 +214,23 @@ Function Desinstalar-Opcional {
     $paquete = if ($Servicio -eq "apache") { "apache-httpd" } else { "nginx" }
     
     Write-Host "`n[*] Desinstalando $Servicio..." -ForegroundColor Yellow
-    if ($Servicio -eq "nginx") { Stop-Process -Name "nginx" -Force -ErrorAction SilentlyContinue }
+    if ($Servicio -eq "nginx") { 
+        # Matar procesos hijos de Nginx sin tocar la consola madre
+        Get-Process -Name "nginx" -ErrorAction SilentlyContinue | Stop-Process -Force 
+    }
     if ($Servicio -eq "apache") { 
         net stop Apache2.4 2>$null
         $apacheExe = Get-ChildItem -Path "C:\tools" -Filter "httpd.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($apacheExe) { & $apacheExe.FullName -k uninstall 2>$null }
-        Stop-Process -Name "httpd" -Force -ErrorAction SilentlyContinue 
+        Get-Process -Name "httpd" -ErrorAction SilentlyContinue | Stop-Process -Force 
     }
 
+    # Desinstalamos suavemente
     choco uninstall $paquete -y | Out-Null
     
     Get-NetFirewallRule -DisplayName "HTTP-$Servicio-*" -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
     
+    # Limpiamos basuras de choco
     Get-ChildItem -Path "C:\tools" -Filter "*$paquete*" -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     if ($Servicio -eq "apache") { Get-ChildItem -Path "C:\tools" -Filter "*apache24*" -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue }
     if ($Servicio -eq "nginx") { Get-ChildItem -Path "C:\tools" -Filter "*nginx*" -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue }
