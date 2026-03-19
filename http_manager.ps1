@@ -79,38 +79,44 @@ function Configurar-Firewall {
 
 Function Instalar-IIS {
     $puerto = 80
-    Write-Host "`n[*] Configurando IIS a la vieja escuela (appcmd)..." -ForegroundColor Cyan
+    Write-Host "`n[*] Verificando si IIS esta instalado..." -ForegroundColor Cyan
     
-    # 1. Aseguramos que el motor basico este prendido
+    # 1. Verificamos si existe el ejecutable appcmd (es la forma mas segura de saber si IIS esta vivo)
+    $appcmd = "$env:systemroot\system32\inetsrv\appcmd.exe"
+    
+    if (-not (Test-Path $appcmd)) {
+        Write-Host "[*] IIS no encontrado. Instalando..." -ForegroundColor Yellow
+        # Lo instalamos de forma silenciosa para que no salgan errores rojos en pantalla si le faltan herramientas
+        Install-WindowsFeature -Name Web-Server -ErrorAction SilentlyContinue | Out-Null
+    }
+    
+    # Verificamos de nuevo por si fallo la instalacion
+    if (-not (Test-Path $appcmd)) {
+        Write-Host "[X] Error: IIS no se pudo instalar porque faltan archivos de origen. Instala con DISM primero." -ForegroundColor Red
+        return
+    }
+
+    # 2. Aseguramos que el motor basico este prendido
     Start-Service -Name W3SVC -ErrorAction SilentlyContinue
 
     $webRoot = "C:\inetpub\wwwroot\mi_sitio"
     Crear-Index -Ruta $webRoot -Servicio "IIS" -Version "Nativo Windows" -Puerto $puerto
     
-    # 2. Usar appcmd.exe directo del sistema para configurar el sitio
-    $appcmd = "$env:systemroot\system32\inetsrv\appcmd.exe"
+    # 3. Configurar el sitio web
+    Write-Host "[*] Deteniendo sitio por defecto..." -ForegroundColor Yellow
+    & $appcmd stop site /site.name:"Default Web Site" 2>$null | Out-Null
     
-    if (Test-Path $appcmd) {
-        Write-Host "[*] Deteniendo sitio por defecto..." -ForegroundColor Yellow
-        & $appcmd stop site /site.name:"Default Web Site" 2>$null | Out-Null
-        
-        Write-Host "[*] Creando nuevo sitio en el puerto $puerto..." -ForegroundColor Yellow
-        # Eliminamos el sitio si ya existia de un intento anterior
-        & $appcmd delete site /site.name:"MiSitioIIS" 2>$null | Out-Null
-        
-        # AQUI ESTA LA CORRECCION DE LA VARIABLE (se usa ${puerto})
-        & $appcmd add site /name:"MiSitioIIS" /id:99 /physicalPath:"$webRoot" /bindings:"http/*:${puerto}:" | Out-Null
-        & $appcmd start site /site.name:"MiSitioIIS" 2>$null | Out-Null
-    } else {
-        Write-Host "[X] Error: IIS no esta instalado correctamente en el sistema." -ForegroundColor Red
-        return
-    }
+    Write-Host "[*] Creando nuevo sitio en el puerto $puerto..." -ForegroundColor Yellow
+    & $appcmd delete site /site.name:"MiSitioIIS" 2>$null | Out-Null
+    & $appcmd add site /name:"MiSitioIIS" /id:99 /physicalPath:"$webRoot" /bindings:"http/*:${puerto}:" | Out-Null
+    & $appcmd start site /site.name:"MiSitioIIS" 2>$null | Out-Null
 
     Configurar-Firewall -Puerto $puerto -Nombre "IIS"
     
     Write-Host "[+] IIS configurado y activo en el puerto $puerto." -ForegroundColor Green
     Write-Host "[>] Abre en tu Host: http://${VM_IP}" -ForegroundColor Yellow
 }
+
 Function Desinstalar-IIS {
     Write-Host "`n[*] Desinstalando IIS..." -ForegroundColor Yellow
     
