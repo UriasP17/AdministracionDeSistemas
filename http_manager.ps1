@@ -79,25 +79,34 @@ function Configurar-Firewall {
 
 Function Instalar-IIS {
     $puerto = 80
-    Write-Host "`n[*] Verificando instalacion de IIS..." -ForegroundColor Cyan
+    Write-Host "`n[*] Configurando IIS a la vieja escuela (appcmd)..." -ForegroundColor Cyan
     
-    # Verificamos si ya esta instalado antes de intentar instalar
-    $iisCheck = Get-WindowsFeature -Name Web-Server -ErrorAction SilentlyContinue
-    
-    if ($iisCheck.InstallState -ne "Installed") {
-        Write-Host "[*] Instalando IIS (Esto puede tardar)..." -ForegroundColor Yellow
-        # Le quitamos el -IncludeManagementTools para que no falle por falta de disco
-        Install-WindowsFeature -name Web-Server | Out-Null
-    } else {
-        Write-Host "[*] IIS ya estaba instalado, configurando archivos..." -ForegroundColor DarkGray
-    }
-    
-    $webRoot = "C:\inetpub\wwwroot"
-    Crear-Index -Ruta $webRoot -Servicio "IIS" -Version "Nativo Windows" -Puerto $puerto
-    Configurar-Firewall -Puerto $puerto -Nombre "IIS"
-    
-    # Prender IIS por si las dudas
+    # 1. Aseguramos que el motor basico este prendido
     Start-Service -Name W3SVC -ErrorAction SilentlyContinue
+
+    $webRoot = "C:\inetpub\wwwroot\mi_sitio"
+    Crear-Index -Ruta $webRoot -Servicio "IIS" -Version "Nativo Windows" -Puerto $puerto
+    
+    # 2. Usar appcmd.exe directo del sistema para configurar el sitio
+    $appcmd = "$env:systemroot\system32\inetsrv\appcmd.exe"
+    
+    if (Test-Path $appcmd) {
+        Write-Host "[*] Deteniendo sitio por defecto..." -ForegroundColor Yellow
+        & $appcmd stop site /site.name:"Default Web Site" 2>$null | Out-Null
+        
+        Write-Host "[*] Creando nuevo sitio en el puerto $puerto..." -ForegroundColor Yellow
+        # Eliminamos el sitio si ya existia de un intento anterior
+        & $appcmd delete site /site.name:"MiSitioIIS" 2>$null | Out-Null
+        
+        # Creamos el sitio apuntando a la carpeta con nuestro index
+        & $appcmd add site /name:"MiSitioIIS" /id:99 /physicalPath:"$webRoot" /bindings:"http/*:$puerto:" | Out-Null
+        & $appcmd start site /site.name:"MiSitioIIS" | Out-Null
+    } else {
+        Write-Host "[X] Error: IIS no esta instalado correctamente en el sistema." -ForegroundColor Red
+        return
+    }
+
+    Configurar-Firewall -Puerto $puerto -Nombre "IIS"
     
     Write-Host "[+] IIS configurado y activo en el puerto $puerto." -ForegroundColor Green
     Write-Host "[>] Abre en tu Host: http://${VM_IP}" -ForegroundColor Yellow
@@ -105,9 +114,15 @@ Function Instalar-IIS {
 
 Function Desinstalar-IIS {
     Write-Host "`n[*] Desinstalando IIS..." -ForegroundColor Yellow
-    Uninstall-WindowsFeature -name Web-Server -Remove | Out-Null
+    
+    $appcmd = "$env:systemroot\system32\inetsrv\appcmd.exe"
+    if (Test-Path $appcmd) {
+        & $appcmd delete site /site.name:"MiSitioIIS" 2>$null | Out-Null
+    }
+
+    Stop-Service -Name W3SVC -ErrorAction SilentlyContinue
     Remove-NetFirewallRule -DisplayName "HTTP-IIS-80" -ErrorAction SilentlyContinue
-    Write-Host "[-] IIS desinstalado." -ForegroundColor Green
+    Write-Host "[-] Sitio IIS desinstalado (El motor sigue activo pero apagado)." -ForegroundColor Green
 }
 
 Function Instalar-Opcional {
