@@ -79,56 +79,38 @@ function Configurar-Firewall {
 
 Function Instalar-IIS {
     $puerto = 80
-    Write-Host "`n[*] Verificando si IIS esta instalado..." -ForegroundColor Cyan
+    Write-Host "`n[*] Configurando servidor HTTP Nativo de Windows (Alternativa a IIS)..." -ForegroundColor Cyan
     
-    $appcmd = "$env:systemroot\system32\inetsrv\appcmd.exe"
-    
-    if (-not (Test-Path $appcmd)) {
-        Write-Host "[*] IIS no encontrado. Buscando disco de instalacion (ISO)..." -ForegroundColor Yellow
-        
-        # Buscar la unidad de CD/DVD automáticamente
-        $isoDrive = Get-Volume | Where-Object DriveType -eq 'CD-ROM' | Select-Object -ExpandProperty DriveLetter -ErrorAction SilentlyContinue
-        
-        if ($isoDrive) {
-            $sourcePath = "${isoDrive}:\sources\sxs"
-            if (Test-Path $sourcePath) {
-                Write-Host "[*] ISO encontrado en unidad ${isoDrive}:. Forzando instalacion..." -ForegroundColor Cyan
-                # Usamos DISM para forzar la instalacion usando el ISO
-                dism /online /enable-feature /featurename:IIS-WebServerRole /source:$sourcePath /limitaccess /all | Out-Null
-            } else {
-                Write-Host "[X] El disco esta montado, pero no tiene la carpeta \sources\sxs." -ForegroundColor Red
-                return
-            }
-        } else {
-            Write-Host "[X] No se detecto ningun disco (ISO) montado. Monta la ISO de Windows Server en VirtualBox e intenta de nuevo." -ForegroundColor Red
-            return
-        }
-    }
-    
-    if (-not (Test-Path $appcmd)) {
-        Write-Host "[X] Error: Fallo la instalacion forzada de IIS. Revisa tu disco." -ForegroundColor Red
-        return
-    }
-
-    Write-Host "[*] Configurando IIS a la vieja escuela (appcmd)..." -ForegroundColor Cyan
-    Start-Service -Name W3SVC -ErrorAction SilentlyContinue
-
     $webRoot = "C:\inetpub\wwwroot\mi_sitio"
-    Crear-Index -Ruta $webRoot -Servicio "IIS" -Version "Nativo Windows" -Puerto $puerto
+    Crear-Index -Ruta $webRoot -Servicio "Windows HTTP Nativo" -Version "System.Net" -Puerto $puerto
+    Configurar-Firewall -Puerto $puerto -Nombre "HTTP-Nativo"
     
-    Write-Host "[*] Deteniendo sitio por defecto..." -ForegroundColor Yellow
-    & $appcmd stop site /site.name:"Default Web Site" 2>$null | Out-Null
-    
-    Write-Host "[*] Creando nuevo sitio en el puerto $puerto..." -ForegroundColor Yellow
-    & $appcmd delete site /site.name:"MiSitioIIS" 2>$null | Out-Null
-    & $appcmd add site /name:"MiSitioIIS" /id:99 /physicalPath:"$webRoot" /bindings:"http/*:${puerto}:" | Out-Null
-    & $appcmd start site /site.name:"MiSitioIIS" 2>$null | Out-Null
+    # Creamos un script en segundo plano que mantendra viva tu pagina web en el puerto 80
+    $codigoServidor = @"
+        `$listener = New-Object System.Net.HttpListener
+        `$listener.Prefixes.Add('http://*:$puerto/')
+        `$listener.Start()
+        while (`$listener.IsListening) {
+            `$context = `$listener.GetContext()
+            `$response = `$context.Response
+            `$content = Get-Content -Path '$webRoot\index.html' -Raw
+            `$buffer = [System.Text.Encoding]::UTF8.GetBytes(`$content)
+            `$response.ContentLength64 = `$buffer.Length
+            `$response.OutputStream.Write(`$buffer, 0, `$buffer.Length)
+            `$response.Close()
+        }
+"@
 
-    Configurar-Firewall -Puerto $puerto -Nombre "IIS"
+    # Matar cualquier intento anterior para que no choque
+    Stop-Process -Name "powershell" -Force -ErrorAction SilentlyContinue | Where-Object { $_.Id -ne $PID }
+
+    # Lanzar el mini-servidor web nativo de Windows en el fondo
+    Start-Process powershell.exe -ArgumentList "-WindowStyle Hidden -NoProfile -Command `"$codigoServidor`""
     
-    Write-Host "[+] IIS configurado y activo en el puerto $puerto." -ForegroundColor Green
+    Write-Host "[+] Servidor Web Nativo configurado y activo en el puerto $puerto." -ForegroundColor Green
     Write-Host "[>] Abre en tu Host: http://${VM_IP}" -ForegroundColor Yellow
 }
+
 
 
 Function Desinstalar-IIS {
