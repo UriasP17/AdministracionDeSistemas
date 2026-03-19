@@ -121,12 +121,17 @@ Function Instalar-Opcional {
     $puerto = Solicitar-Puerto -ServicioNombre $Servicio
 
     Write-Host "[*] Instalando $Servicio ($ver) desde Chocolatey..." -ForegroundColor Cyan
-    choco install $paquete -y --force
+    
+    # === AQUI ESTA LA MAGIA PARA BRINCAR EL ERROR DE NGINX ===
+    if ($Servicio -eq "nginx") {
+        choco install $paquete -y --force --package-parameters "/port:$puerto"
+    } else {
+        choco install $paquete -y --force
+    }
     
     Write-Host "[*] Dando tiempo al sistema para desempaquetar archivos..." -ForegroundColor Yellow
     Start-Sleep -Seconds 3
 
-    # Busqueda blindada, revisando carpeta por carpeta
     $archivoConf = $null
     $rutasBusqueda = @("C:\tools", "C:\ProgramData\chocolatey\lib", "C:\nginx")
     
