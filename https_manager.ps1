@@ -1,5 +1,7 @@
 #Requires -RunAsAdministrator
 
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
 $FTP_SERVER   = "127.0.0.1"
 $FTP_USER     = "repositorio"
 $FTP_PASS     = "Hola1234."
@@ -14,9 +16,6 @@ $NGINX_DIR    = "$BASE_DIR\Nginx"
 $TOMCAT_DIR   = "$BASE_DIR\Tomcat"
 $FZ_DIR       = "$BASE_DIR\FileZilla"
 $SSL_DIR      = "$BASE_DIR\SSL"
-
-# Forzar TLS 1.2 para que las descargas por HTTPS no truenen en Windows Server
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 function Main {
     while ($true) {
@@ -263,7 +262,7 @@ function Instalar-Apache {
     param($Archivo, $WebFTP, $SSL)
 
     Write-Host "`n-- Configuracion de puertos para Apache ---------"
-    $puertos = Pedir-Puerto "Apache" 80 443
+    $puertos = Pedir-Puerto "Apache" 81 444
     $puerto_http  = $puertos[0]
     $puerto_https = $puertos[1]
 
@@ -271,20 +270,18 @@ function Instalar-Apache {
         if (-not (Descargar-Y-Validar "Apache" $Archivo)) { return }
         if (-not (Instalar-Paquete-Local $Archivo $APACHE_DIR)) { return }
     } else {
-        Write-Host "Descargando Apache puro en formato ZIP..."
-        # Bypass a repositorios de GitHub confiables y sin bloqueo (moodle org o jmwebservices)
+        Write-Host "Descargando Apache usando BITS..."
         $url = "https://github.com/jmwebservices/httpd-2.4.63-win64-VS17/archive/refs/heads/main.zip" 
+        $destinoZip = "$env:TEMP\apache.zip"
+        
         try {
-            Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\apache.zip" -UseBasicParsing -ErrorAction Stop
+            if (Test-Path $destinoZip) { Remove-Item $destinoZip -Force }
+            Start-BitsTransfer -Source $url -Destination $destinoZip -ErrorAction Stop
             
-            # Verificamos si realmente se descargó un ZIP midiendo el peso
-            $fileInfo = Get-Item "$env:TEMP\apache.zip"
-            if ($fileInfo.Length -lt 100000) { throw "El archivo descargado esta corrupto o es muy pequeno." }
-
+            Write-Host "Descarga completa. Descomprimiendo..."
             New-Item -ItemType Directory -Force -Path $APACHE_DIR | Out-Null
-            Expand-Archive -Path "$env:TEMP\apache.zip" -DestinationPath $APACHE_DIR -Force
+            Expand-Archive -Path $destinoZip -DestinationPath $APACHE_DIR -Force
             
-            # Mover archivos si se extrajeron dentro de una subcarpeta (ej: httpd-2.4.63-win64-VS17-main/Apache24)
             $subMain = Get-ChildItem $APACHE_DIR -Directory | Select-Object -First 1
             if ($subMain) {
                 $subApache24 = Get-ChildItem "$($subMain.FullName)" -Directory | Where-Object Name -like "*Apache24*" | Select-Object -First 1
@@ -296,8 +293,21 @@ function Instalar-Apache {
                 Remove-Item $subMain.FullName -Recurse -Force -ErrorAction SilentlyContinue
             }
         } catch {
-            Write-Host "ERROR CRITICO descargando Apache: $($_.Exception.Message)" -ForegroundColor Red
-            return
+            Write-Host "Fallo BITS. Intentando curl nativo..." -ForegroundColor Yellow
+            try {
+                & curl.exe -L -o "$destinoZip" $url
+                New-Item -ItemType Directory -Force -Path $APACHE_DIR | Out-Null
+                Expand-Archive -Path $destinoZip -DestinationPath $APACHE_DIR -Force
+                
+                $subMain = Get-ChildItem $APACHE_DIR -Directory | Select-Object -First 1
+                if ($subMain) {
+                    Get-ChildItem "$($subMain.FullName)\*" | Move-Item -Destination $APACHE_DIR -Force -ErrorAction SilentlyContinue
+                    Remove-Item $subMain.FullName -Recurse -Force -ErrorAction SilentlyContinue
+                }
+            } catch {
+                Write-Host "ERROR CRITICO descargando Apache." -ForegroundColor Red
+                return
+            }
         }
     }
 
@@ -312,8 +322,6 @@ function Instalar-Apache {
     if (Test-Path $httpd_conf) {
         (Get-Content $httpd_conf) -replace '^Listen 80$',"Listen $puerto_http" | Set-Content $httpd_conf
         (Get-Content $httpd_conf) -replace 'SRVROOT ".*"',"SRVROOT `"$APACHE_DIR`"" | Set-Content $httpd_conf
-    } else {
-        Write-Host "ADVERTENCIA: No se encontro el archivo httpd.conf. La extraccion pudo haber fallado." -ForegroundColor Yellow
     }
 
     if ($SSL -eq "S") {
@@ -346,8 +354,6 @@ Listen $puerto_https
         & $httpd -k install -n "Apache2.4" 2>$null
         Start-Service "Apache2.4" -ErrorAction SilentlyContinue
         Set-Service  "Apache2.4" -StartupType Automatic -ErrorAction SilentlyContinue
-    } else {
-        Write-Host "ADVERTENCIA: No se pudo arrancar Apache. httpd.exe no encontrado en $APACHE_DIR\bin" -ForegroundColor Yellow
     }
 
     $script:RESUMEN_INSTALACIONES += "Apache  | SSL:$SSL | HTTP:$puerto_http  HTTPS:$puerto_https"
@@ -366,9 +372,9 @@ function Instalar-Nginx {
         if (-not (Descargar-Y-Validar "Nginx" $Archivo)) { return }
         if (-not (Instalar-Paquete-Local $Archivo $NGINX_DIR)) { return }
     } else {
-        Write-Host "Descargando Nginx desde nginx.org..."
+        Write-Host "Descargando Nginx..."
         try {
-            Invoke-WebRequest -Uri "https://nginx.org/download/nginx-1.26.2.zip" -OutFile "$env:TEMP\nginx.zip" -UseBasicParsing
+            & curl.exe -s -L -o "$env:TEMP\nginx.zip" "https://nginx.org/download/nginx-1.26.2.zip"
             New-Item -ItemType Directory -Force -Path $NGINX_DIR | Out-Null
             Expand-Archive "$env:TEMP\nginx.zip" -DestinationPath $NGINX_DIR -Force
             $sub = Get-ChildItem $NGINX_DIR -Directory | Select-Object -First 1
@@ -447,7 +453,7 @@ function Instalar-Tomcat {
     $java = Get-Command java -ErrorAction SilentlyContinue
     if (-not $java) {
         Write-Host "Java no encontrado. Descargando OpenJDK 17..."
-        Invoke-WebRequest -Uri "https://aka.ms/download-jdk/microsoft-jdk-17-windows-x64.msi" -OutFile "$env:TEMP\jdk17.msi" -UseBasicParsing
+        & curl.exe -s -L -o "$env:TEMP\jdk17.msi" "https://aka.ms/download-jdk/microsoft-jdk-17-windows-x64.msi"
         Start-Process msiexec.exe -ArgumentList "/i `"$env:TEMP\jdk17.msi`" /quiet /norestart" -Wait
         $env:Path += ";C:\Program Files\Microsoft\jdk-17\bin"
     }
@@ -457,7 +463,7 @@ function Instalar-Tomcat {
         if (-not (Instalar-Paquete-Local $Archivo $TOMCAT_DIR)) { return }
     } else {
         Write-Host "Descargando Tomcat 10..."
-        Invoke-WebRequest -Uri "https://dlcdn.apache.org/tomcat/tomcat-10/v10.1.30/bin/apache-tomcat-10.1.30-windows-x64.zip" -OutFile "$env:TEMP\tomcat.zip" -UseBasicParsing
+        & curl.exe -s -L -o "$env:TEMP\tomcat.zip" "https://dlcdn.apache.org/tomcat/tomcat-10/v10.1.30/bin/apache-tomcat-10.1.30-windows-x64.zip"
         New-Item -ItemType Directory -Force -Path $TOMCAT_DIR | Out-Null
         Expand-Archive "$env:TEMP\tomcat.zip" -DestinationPath $TOMCAT_DIR -Force
         $sub = Get-ChildItem $TOMCAT_DIR -Directory | Select-Object -First 1
@@ -548,7 +554,7 @@ function Instalar-FileZilla {
         if (-not (Instalar-Paquete-Local $Archivo $FZ_DIR)) { return }
     } else {
         Write-Host "Descargando FileZilla Server..."
-        Invoke-WebRequest -Uri "https://dl2.cdn.filezilla-project.org/server/FileZilla_Server_1.8.2_win64-setup.exe" -OutFile "$env:TEMP\fzserver.exe" -UseBasicParsing
+        & curl.exe -s -L -o "$env:TEMP\fzserver.exe" "https://dl2.cdn.filezilla-project.org/server/FileZilla_Server_1.8.2_win64-setup.exe"
         Start-Process "$env:TEMP\fzserver.exe" -ArgumentList "/S" -Wait
     }
 
@@ -690,16 +696,16 @@ function Preparar-Repositorio-FTP {
     Write-Host "`nDescargando instaladores de Windows..."
     
     Write-Host " -> Nginx..."
-    Invoke-WebRequest -Uri "https://nginx.org/download/nginx-1.26.2.zip" -OutFile "$base\Nginx\nginx-1.26.2.zip" -UseBasicParsing
+    & curl.exe -s -L -o "$base\Nginx\nginx-1.26.2.zip" "https://nginx.org/download/nginx-1.26.2.zip"
     
     Write-Host " -> Apache..."
-    Invoke-WebRequest -Uri "https://github.com/jmwebservices/httpd-2.4.63-win64-VS17/archive/refs/heads/main.zip" -OutFile "$base\Apache\httpd-2.4.63-win64.zip" -UseBasicParsing
+    & curl.exe -s -L -o "$base\Apache\httpd-2.4.63-win64.zip" "https://github.com/jmwebservices/httpd-2.4.63-win64-VS17/archive/refs/heads/main.zip"
     
     Write-Host " -> Tomcat..."
-    Invoke-WebRequest -Uri "https://dlcdn.apache.org/tomcat/tomcat-10/v10.1.30/bin/apache-tomcat-10.1.30-windows-x64.zip" -OutFile "$base\Tomcat\tomcat-10.1.30-win64.zip" -UseBasicParsing
+    & curl.exe -s -L -o "$base\Tomcat\tomcat-10.1.30-win64.zip" "https://dlcdn.apache.org/tomcat/tomcat-10/v10.1.30/bin/apache-tomcat-10.1.30-windows-x64.zip"
     
     Write-Host " -> FileZilla..."
-    Invoke-WebRequest -Uri "https://dl2.cdn.filezilla-project.org/server/FileZilla_Server_1.8.2_win64-setup.exe" -OutFile "$base\FileZilla\FileZilla_Server_1.8.2_win64-setup.exe" -UseBasicParsing
+    & curl.exe -s -L -o "$base\FileZilla\FileZilla_Server_1.8.2_win64-setup.exe" "https://dl2.cdn.filezilla-project.org/server/FileZilla_Server_1.8.2_win64-setup.exe"
 
     Write-Host "`nGenerando archivos SHA256..."
     Get-ChildItem $base -Recurse -File | Where-Object { $_.Extension -ne ".sha256" } | ForEach-Object {
