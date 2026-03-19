@@ -29,7 +29,7 @@ function Solicitar-Puerto {
         
         $ocupado = Test-NetConnection -ComputerName localhost -Port $p -WarningAction SilentlyContinue
         if ($ocupado.TcpTestSucceeded) {
-            Write-Host "[!] El puerto $p ya esta en uso. Intenta con otro." -ForegroundColor Red
+            Write-Host "[!] El puerto $p ya esta ocupado (seguro un servicio anterior no se cerro bien). Intenta con otro." -ForegroundColor Red
             continue
         }
         return $p
@@ -40,7 +40,6 @@ function Crear-Index {
     param([string]$Ruta, [string]$Servicio, [string]$Version, [int]$Puerto)
     if (!(Test-Path $Ruta)) { New-Item -Path $Ruta -ItemType Directory -Force | Out-Null }
     
-    # ======== AQUI ESTA EL NUEVO DISENO MODO OSCURO ========
     $html = @"
 <!DOCTYPE html>
 <html lang="es">
@@ -72,21 +71,11 @@ function Crear-Index {
         letter-spacing: 2px;
         text-shadow: 0 0 10px rgba(0, 230, 118, 0.3);
     }
-    p {
-        font-size: 1.1em;
-        line-height: 1.6;
-        margin: 10px 0;
-    }
-    strong {
-        color: #8be9fd;
-    }
+    p { font-size: 1.1em; line-height: 1.6; margin: 10px 0; }
+    strong { color: #8be9fd; }
     .url-box {
-        background: #1e1e2e;
-        padding: 10px;
-        border-radius: 6px;
-        margin-top: 20px;
-        font-family: monospace;
-        color: #ff79c6;
+        background: #1e1e2e; padding: 10px; border-radius: 6px;
+        margin-top: 20px; font-family: monospace; color: #ff79c6;
         border: 1px dashed #6272a4;
     }
   </style>
@@ -98,9 +87,7 @@ function Crear-Index {
       <p><strong>Versión:</strong> $Version</p>
       <p><strong>Puerto:</strong> $Puerto</p>
       <p><strong>IP VirtualBox:</strong> $VM_IP</p>
-      <div class="url-box">
-          URL: http://${VM_IP}:${Puerto}
-      </div>
+      <div class="url-box">URL: http://${VM_IP}:${Puerto}</div>
   </div>
 </body>
 </html>
@@ -148,10 +135,18 @@ while (`$listener.IsListening) {
 }
 
 Function Desinstalar-IIS {
-    Write-Host "`n[*] Desinstalando IIS..." -ForegroundColor Yellow
-    Get-Process -Name "powershell" -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -eq "ServidorNativoIIS" } | Stop-Process -Force
+    Write-Host "`n[*] Desinstalando IIS y liberando el puerto..." -ForegroundColor Yellow
+    
+    # AQUI LA MAGIA: Busca en las entrañas de Windows el script oculto y lo mata liberando tu puerto
+    $iisProcs = Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe' AND CommandLine LIKE '%ServidorNativoIIS%'"
+    foreach ($p in $iisProcs) {
+        Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+    
+    # BORRAR LA REGLA DEL PUERTO PARA REUSARLO
     Get-NetFirewallRule -DisplayName "HTTP-HTTP-Nativo-*" -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
-    Write-Host "[-] Sitio HTTP Nativo apagado." -ForegroundColor Green
+    
+    Write-Host "[-] Sitio HTTP Nativo apagado y puerto liberado con éxito." -ForegroundColor Green
 }
 
 Function Instalar-Opcional {
@@ -193,7 +188,7 @@ Function Instalar-Opcional {
             $nginxRoot = $archivoConf.Directory.Parent.FullName
             $htmlDir = Join-Path -Path $nginxRoot -ChildPath "html"
 
-            Stop-Process -Name "nginx" -Force -ErrorAction SilentlyContinue
+            Get-Process -Name "nginx" -ErrorAction SilentlyContinue | Stop-Process -Force
             Start-Sleep -Seconds 1
 
             $textoConf = Get-Content $conf
@@ -232,7 +227,7 @@ Function Instalar-Opcional {
                 Write-Host "[*] Instalando y arrancando Apache como Servicio SSH..." -ForegroundColor Yellow
                 
                 & $apacheExe.FullName -k uninstall 2>$null
-                Stop-Process -Name "httpd" -Force -ErrorAction SilentlyContinue
+                Get-Process -Name "httpd" -ErrorAction SilentlyContinue | Stop-Process -Force
                 Start-Sleep -Seconds 2
                 
                 & $apacheExe.FullName -k install 2>$null
@@ -253,7 +248,7 @@ Function Desinstalar-Opcional {
     param($Servicio)
     $paquete = if ($Servicio -eq "apache") { "apache-httpd" } else { "nginx" }
     
-    Write-Host "`n[*] Desinstalando $Servicio..." -ForegroundColor Yellow
+    Write-Host "`n[*] Desinstalando $Servicio y liberando puerto..." -ForegroundColor Yellow
     if ($Servicio -eq "nginx") { 
         Get-Process -Name "nginx" -ErrorAction SilentlyContinue | Stop-Process -Force 
     }
@@ -266,13 +261,14 @@ Function Desinstalar-Opcional {
 
     choco uninstall $paquete -y | Out-Null
     
+    # BARREMOS EL FIREWALL DE ESE SERVICIO
     Get-NetFirewallRule -DisplayName "HTTP-$Servicio-*" -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
     
     Get-ChildItem -Path "C:\tools" -Filter "*$paquete*" -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     if ($Servicio -eq "apache") { Get-ChildItem -Path "C:\tools" -Filter "*apache24*" -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue }
     if ($Servicio -eq "nginx") { Get-ChildItem -Path "C:\tools" -Filter "*nginx*" -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue }
 
-    Write-Host "[-] $Servicio desinstalado y carpetas limpias." -ForegroundColor Green
+    Write-Host "[-] $Servicio desinstalado y puerto liberado con éxito." -ForegroundColor Green
 }
 
 do {
