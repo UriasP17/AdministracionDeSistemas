@@ -165,7 +165,9 @@ Function Instalar-Opcional {
             Add-Content -Path $conf -Value "`nServerName localhost:$puerto"
             
             Crear-Index -Ruta $htdocs -Servicio "Apache" -Version $ver -Puerto $puerto
-            Start-Service -Name "Apache*" -ErrorAction SilentlyContinue
+            Write-Host "[*] Arrancando proceso de Apache en segundo plano..." -ForegroundColor Yellow
+Start-Process $apacheExe.FullName -WindowStyle Hidden
+
         } else { Write-Host "[X] Error: No se encontro httpd.conf." -ForegroundColor Red; return }
     }
 
