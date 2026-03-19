@@ -4,14 +4,11 @@
 
 $VM_IP = "192.168.56.10" # Tu IP de VirtualBox
 
-# Validar Administrador
 if (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Write-Warning "[!] Ejecuta PowerShell como Administrador."
     Start-Sleep -Seconds 4
     exit
 }
-
-# --- UTILIDADES IMPORTADAS ---
 
 function Solicitar-Puerto {
     param([string]$ServicioNombre)
@@ -21,7 +18,6 @@ function Solicitar-Puerto {
         $input_p = Read-Host "Ingresa puerto para $ServicioNombre (ej. 8080, 81)"
         if ([string]::IsNullOrWhiteSpace($input_p)) { return 8080 }
         
-        # Validacion limpia de puros numeros
         if ($input_p -notmatch '^\d+$') { Write-Host "[!] Solo numeros." -ForegroundColor Red; continue }
         
         $p = [int]$input_p
@@ -68,7 +64,6 @@ function Crear-Index {
 </body>
 </html>
 "@
-    # Guardar en UTF-8 limpio sin la 'A' rara
     [IO.File]::WriteAllText("$Ruta\index.html", $html)
 }
 
@@ -78,8 +73,6 @@ function Configurar-Firewall {
     Remove-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
     New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Protocol TCP -LocalPort $Puerto -Action Allow -Profile Any -ErrorAction SilentlyContinue | Out-Null
 }
-
-# --- FUNCIONES DE SERVIDORES ---
 
 Function Instalar-IIS {
     $puerto = 80
@@ -106,7 +99,6 @@ while (`$listener.IsListening) {
 } catch { exit }
 "@
 
-    # Lanzar el servidor en segundo plano de forma silenciosa sin matar nada
     Start-Process powershell.exe -ArgumentList "-WindowStyle Hidden -NoProfile -Command `"$codigoServidor`""
     
     Write-Host "[+] Servidor Web Nativo activo en el puerto $puerto." -ForegroundColor Green
@@ -115,7 +107,6 @@ while (`$listener.IsListening) {
 
 Function Desinstalar-IIS {
     Write-Host "`n[*] Desinstalando IIS..." -ForegroundColor Yellow
-    # Matar el proceso de powershell oculto
     Stop-Process -Name "powershell" -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -eq "" }
     Remove-NetFirewallRule -DisplayName "HTTP-HTTP-Nativo-80" -ErrorAction SilentlyContinue
     Write-Host "[-] Sitio HTTP Nativo apagado." -ForegroundColor Green
@@ -127,13 +118,11 @@ Function Instalar-Opcional {
 
     Write-Host "`n[*] Preparando instalacion de $Servicio..." -ForegroundColor Yellow
     $ver = "Latest"
-
     $puerto = Solicitar-Puerto -ServicioNombre $Servicio
 
     Write-Host "[*] Instalando $Servicio ($ver) desde Chocolatey..." -ForegroundColor Cyan
     choco install $paquete -y --force | Out-Null
 
-    Write-Host "[*] Configurando puertos y arrancando servicio..." -ForegroundColor Yellow
     $rutasBusqueda = @("C:\tools", "C:\Apache24", "C:\ProgramData\chocolatey\lib\$paquete", "$env:APPDATA\Apache24", "$env:APPDATA\nginx", "$env:APPDATA")
 
     if ($Servicio -eq "nginx") {
@@ -160,7 +149,6 @@ Function Instalar-Opcional {
 
             (Get-Content $conf) -replace "Listen 80", "Listen $puerto" | Set-Content $conf
             
-            # Limpiar ServerName viejo y poner el nuevo
             (Get-Content $conf) -replace "^ServerName.*", "" | Set-Content $conf
             Add-Content -Path $conf -Value "`nServerName localhost:$puerto"
             
@@ -168,15 +156,14 @@ Function Instalar-Opcional {
             
             $apacheExe = Get-ChildItem -Path $apacheRoot -Filter "httpd.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
             if ($apacheExe) {
-                Write-Host "[*] Arrancando Apache en ventana nueva..." -ForegroundColor Yellow
-                # Mata servicios viejos
+                Write-Host "[*] Arrancando Apache en segundo plano (Modo SSH)..." -ForegroundColor Yellow
                 Stop-Process -Name "httpd" -Force -ErrorAction SilentlyContinue
                 Start-Sleep -Seconds 1
                 
-                # LA MAGIA: Abre Apache en ventana normal
-                Start-Process -FilePath $apacheExe.FullName -WorkingDirectory $apacheRoot -WindowStyle Normal
+                # LA MAGIA PARA SSH: Usar un Job
+                $jobScript = { & $args[0] }
+                Start-Job -ScriptBlock $jobScript -ArgumentList $apacheExe.FullName | Out-Null
                 
-                Write-Host "[!] IMPORTANTE: Se abrio una ventana negra de Apache en tu VirtualBox. DEJALA ABIERTA." -ForegroundColor Cyan
             } else { Write-Host "[X] Error: No encontre httpd.exe" -ForegroundColor Red; return }
         } else { Write-Host "[X] Error: No se encontro httpd.conf." -ForegroundColor Red; return }
     }
@@ -194,6 +181,7 @@ Function Desinstalar-Opcional {
     if ($Servicio -eq "nginx") { Stop-Process -Name "nginx" -Force -ErrorAction SilentlyContinue }
     if ($Servicio -eq "apache") { 
         Stop-Process -Name "httpd" -Force -ErrorAction SilentlyContinue 
+        Get-Job | Remove-Job -Force -ErrorAction SilentlyContinue
     }
 
     choco uninstall $paquete -y | Out-Null
@@ -206,7 +194,6 @@ Function Desinstalar-Opcional {
     Write-Host "[-] $Servicio desinstalado y carpetas limpias." -ForegroundColor Green
 }
 
-# --- MENU PRINCIPAL ---
 do {
     Write-Host "`n======= MENU WINDOWS =======" -ForegroundColor Cyan
     Write-Host "1) Instalar IIS (Obligatorio)"
