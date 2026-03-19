@@ -120,13 +120,13 @@ Function Instalar-Opcional {
     $ver = "Latest"
     $puerto = Solicitar-Puerto -ServicioNombre $Servicio
 
-    Write-Host "[*] Instalando $Servicio ($ver) desde Chocolatey..." -ForegroundColor Cyan
+    Write-Host "[*] Instalando $Servicio ($ver) desde Chocolatey (esto puede tardar un poco)..." -ForegroundColor Cyan
     
-    # === AQUI ESTA LA MAGIA PARA BRINCAR EL ERROR DE NGINX ===
+    # === AQUI LE TAPAMOS LA BOCA A CHOCO OTRA VEZ (Out-Null) ===
     if ($Servicio -eq "nginx") {
-        choco install $paquete -y --force --package-parameters "/port:$puerto"
+        choco install $paquete -y --force --package-parameters "/port:$puerto" | Out-Null
     } else {
-        choco install $paquete -y --force
+        choco install $paquete -y --force | Out-Null
     }
     
     Write-Host "[*] Dando tiempo al sistema para desempaquetar archivos..." -ForegroundColor Yellow
@@ -165,7 +165,7 @@ Function Instalar-Opcional {
                 Write-Host "[*] Arrancando Nginx en segundo plano..." -ForegroundColor Yellow
                 Start-Process $exeNginx.FullName -WorkingDirectory $exeNginx.Directory.FullName -WindowStyle Hidden
             } else { Write-Host "[X] Error: Se encontro config, pero no nginx.exe." -ForegroundColor Red; return }
-        } else { Write-Host "[X] Error: No se encontro nginx.conf. Revisa si Chocolatey lanzo algun error arriba." -ForegroundColor Red; return }
+        } else { Write-Host "[X] Error: No se encontro nginx.conf. Revisa si Chocolatey lanzo algun error." -ForegroundColor Red; return }
     }
 
     if ($Servicio -eq "apache") {
