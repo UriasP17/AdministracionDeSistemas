@@ -40,7 +40,6 @@ function Crear-Index {
     param([string]$Ruta, [string]$Servicio, [string]$Version, [int]$Puerto)
     if (!(Test-Path $Ruta)) { New-Item -Path $Ruta -ItemType Directory -Force | Out-Null }
     
-    # ======== DISENO MINIMALISTA ========
     $html = @"
 <!DOCTYPE html>
 <html lang="en">
@@ -163,13 +162,11 @@ while (`$listener.IsListening) {
 Function Desinstalar-IIS {
     Write-Host "`n[*] Desinstalando IIS y liberando puertos..." -ForegroundColor Yellow
     
-    # Matar proceso via WMI para asegurar que suelte el puerto
     $iisProcs = Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe' AND CommandLine LIKE '%ServidorNativoIIS%'"
     foreach ($p in $iisProcs) {
         Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
     }
     
-    # Limpieza agresiva de firewall
     Get-NetFirewallRule -DisplayName "HTTP-HTTP-Nativo-*" -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
     
     Write-Host "[-] Sitio apagado. Puerto liberado." -ForegroundColor Green
@@ -185,7 +182,7 @@ Function Instalar-Opcional {
     $puerto = Solicitar-Puerto -ServicioNombre $Servicio
 
     Write-Host "[*] Instalando $paquete via Chocolatey..." -ForegroundColor Cyan
-    Write-Host "============= LOG DE CHOCOLATEY (EN VIVO) =============" -ForegroundColor DarkGray
+    Write-Host "============= LOG DE CHOCOLATEY =============" -ForegroundColor DarkGray
     
     if ($Servicio -eq "nginx") {
         choco install $paquete -y --force --package-parameters "/port:$puerto"
@@ -193,11 +190,10 @@ Function Instalar-Opcional {
         choco install $paquete -y --force
     }
     
-    Write-Host "=======================================================" -ForegroundColor DarkGray
-    Write-Host "[*] Buscando configuracion de $Servicio (Esperando disco duro)..." -ForegroundColor Yellow
+    Write-Host "=============================================" -ForegroundColor DarkGray
+    Write-Host "[*] Buscando archivo de configuracion (Esperando disco)..." -ForegroundColor Yellow
 
     $archivoConf = $null
-    # ======= FIX DEFINITIVO: AGREGAMOS LAS RUTAS RARAS DE APPDATA =======
     $rutasBusqueda = @(
         "C:\tools", 
         "C:\ProgramData\chocolatey\lib", 
@@ -246,7 +242,7 @@ Function Instalar-Opcional {
             if ($exeNginx) {
                 Start-Process $exeNginx.FullName -WorkingDirectory $exeNginx.Directory.FullName -WindowStyle Hidden
             } else { Write-Host "[-] Error: nginx.exe no encontrado." -ForegroundColor Red; return }
-        } else { Write-Host "[-] Error: nginx.conf no encontrado. Revisa el log de Chocolatey arriba." -ForegroundColor Red; return }
+        } else { Write-Host "[-] Error: nginx.conf no encontrado." -ForegroundColor Red; return }
     }
 
     if ($Servicio -eq "apache") {
@@ -257,6 +253,11 @@ Function Instalar-Opcional {
             $apacheRootFormat = $apacheRoot -replace "\\", "/"
             $htdocs = Join-Path -Path $apacheRoot -ChildPath "htdocs"
 
+            Write-Host "[*] Inyectando configuracion en Apache..." -ForegroundColor Cyan
+            
+            Get-Process -Name "httpd" -ErrorAction SilentlyContinue | Stop-Process -Force
+            Start-Sleep -Seconds 1
+            
             $textoConf = Get-Content $conf
             $textoConf = $textoConf -replace 'Define SRVROOT .*', "Define SRVROOT `"$apacheRootFormat`""
             $textoConf = $textoConf -replace '(?i)c:/Apache24', $apacheRootFormat
@@ -268,26 +269,27 @@ Function Instalar-Opcional {
             
             $apacheExe = Get-ChildItem -Path $apacheRoot -Filter "httpd.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
             if ($apacheExe) {
+                Write-Host "[*] Limpiando servicios viejos..." -ForegroundColor DarkGray
                 & $apacheExe.FullName -k uninstall 2>$null
-                Get-Process -Name "httpd" -ErrorAction SilentlyContinue | Stop-Process -Force
-                Start-Sleep -Seconds 2
+                Start-Sleep -Seconds 1
                 
-                & $apacheExe.FullName -k install 2>$null
-                Start-Sleep -Seconds 2
+                Write-Host "[*] Iniciando motor de Apache..." -ForegroundColor Yellow
+                Start-Process $apacheExe.FullName -WorkingDirectory $apacheExe.Directory.FullName -WindowStyle Hidden
                 
-                net start Apache2.4 | Out-Null
+                Start-Sleep -Seconds 2
+                $verificar = Get-Process -Name "httpd" -ErrorAction SilentlyContinue
+                if (-not $verificar) {
+                    Write-Host "[-] Alerta: El proceso httpd se cerro al arrancar." -ForegroundColor Red
+                }
                 
             } else { Write-Host "[-] Error: httpd.exe no encontrado." -ForegroundColor Red; return }
-        } else { Write-Host "[-] Error: httpd.conf no encontrado a pesar de buscar en AppData." -ForegroundColor Red; return }
+        } else { Write-Host "[-] Error: httpd.conf no encontrado." -ForegroundColor Red; return }
     }
 
     Configurar-Firewall -Puerto $puerto -Nombre $Servicio
-    Write-Host "[+] $Servicio instalado correctamente en puerto $puerto." -ForegroundColor Green
+    Write-Host "[+] $Servicio instalado en puerto $puerto." -ForegroundColor Green
     Write-Host "[>] URL: http://${VM_IP}:${puerto}" -ForegroundColor Yellow
 }
-
-
-
 
 Function Desinstalar-Opcional {
     param($Servicio)
@@ -300,7 +302,6 @@ Function Desinstalar-Opcional {
     }
     if ($Servicio -eq "apache") { 
         net stop Apache2.4 2>$null
-        # Buscamos el exe en appdata tambien
         $apacheExe = Get-ChildItem -Path "$env:APPDATA", "C:\tools" -Filter "httpd.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($apacheExe) { & $apacheExe.FullName -k uninstall 2>$null }
         Get-Process -Name "httpd" -ErrorAction SilentlyContinue | Stop-Process -Force 
@@ -310,7 +311,6 @@ Function Desinstalar-Opcional {
     
     Get-NetFirewallRule -DisplayName "HTTP-$Servicio-*" -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
     
-    # Limpieza profunda en tools y en AppData
     @("C:\tools", "$env:APPDATA") | ForEach-Object {
         $ruta = $_
         if (Test-Path $ruta) {
@@ -322,7 +322,6 @@ Function Desinstalar-Opcional {
 
     Write-Host "[-] $Servicio desinstalado. Puerto liberado." -ForegroundColor Green
 }
-
 
 do {
     Write-Host "`n=== MENU WINDOWS SERVER ===" -ForegroundColor Cyan
