@@ -1,5 +1,9 @@
 #Requires -RunAsAdministrator
 
+# ====================================================================
+#   GESTOR DE FTP (USANDO FILEZILLA SERVER - BYPASS IIS)
+# ====================================================================
+
 $FZ_INSTALLER = "$env:TEMP\FileZilla_Server_Installer.exe"
 $FTP_ROOT     = "C:\FTP_FZ"
 $XML_CONFIG   = "C:\ProgramData\filezilla-server\settings.xml"
@@ -25,13 +29,13 @@ function Bajar-Instaladores {
     $rutaNginx = "$FTP_ROOT\Boveda\http\Windows\Nginx"
     if (-not (Test-Path "$rutaNginx\nginx.zip")) {
         Write-Host "  ~ Descargando Nginx..." -ForegroundColor Yellow
-        Invoke-WebRequest "https://nginx.org/download/nginx-1.24.0.zip" -OutFile "$rutaNginx\nginx.zip" -UseBasicParsing
+        Invoke-WebRequest -Uri "https://nginx.org/download/nginx-1.24.0.zip" -OutFile "$rutaNginx\nginx.zip" -UseBasicParsing
     }
     
     $rutaApache = "$FTP_ROOT\Boveda\http\Windows\Apache"
     if (-not (Test-Path "$rutaApache\apache.msi")) {
         Write-Host "  ~ Descargando Apache..." -ForegroundColor Yellow
-        Invoke-WebRequest "https://archive.apache.org/dist/httpd/binaries/win32/httpd-2.2.25-win32-x86-openssl-0.9.8y.msi" -OutFile "$rutaApache\apache.msi" -UseBasicParsing
+        Invoke-WebRequest -Uri "https://archive.apache.org/dist/httpd/binaries/win32/httpd-2.2.25-win32-x86-openssl-0.9.8y.msi" -OutFile "$rutaApache\apache.msi" -UseBasicParsing
     }
     Write-Host "  + Boveda lista." -ForegroundColor Green
 }
@@ -43,25 +47,40 @@ function Instalar-FileZilla {
         return
     }
 
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    Invoke-WebRequest "https://dl2.cdn.filezilla-project.org/server/FileZilla_Server_1.8.2_win64-setup.exe" -OutFile $FZ_INSTALLER -UseBasicParsing
+    Write-Host "  ~ Descargando instalador de FileZilla Server..." -ForegroundColor Yellow
+    $url = "https://download.filezilla-project.org/server/FileZilla_Server_1.8.2_win64-setup.exe"
     
+    # Truco para evadir el error 403 Forbidden de FileZilla (usando curl y un User-Agent falso)
+    & curl.exe -s -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" -o $FZ_INSTALLER $url
+    
+    if (-not (Test-Path $FZ_INSTALLER) -or (Get-Item $FZ_INSTALLER).Length -lt 1000) {
+        Write-Host "  - ERROR: No se pudo descargar el instalador." -ForegroundColor Red
+        return
+    }
+
     Write-Host "  ~ Ejecutando instalacion silenciosa..." -ForegroundColor Yellow
     Start-Process -FilePath $FZ_INSTALLER -ArgumentList "/S" -Wait
     Start-Sleep -Seconds 5
-    Write-Host "  + Instalacion completada." -ForegroundColor Green
+    
+    if (Get-Service -Name "filezilla-server" -ErrorAction SilentlyContinue) {
+        Write-Host "  + Instalacion completada con exito." -ForegroundColor Green
+    } else {
+        Write-Host "  - ERROR: El servicio de FileZilla no se instalo correctamente." -ForegroundColor Red
+    }
 }
 
 function Generar-Configuracion-Usuarios {
     Write-Host "`n[*] Inyectando configuracion de usuarios y permisos..." -ForegroundColor Cyan
     
+    # Detenemos FileZilla para poder inyectar su archivo XML de configuración
     Stop-Service "filezilla-server" -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 2
 
-    # Se genera un XML inyectado directamente para saltarnos la GUI
-    # En FileZilla, si dejas el hash vacío, el usuario no tiene contraseña, pero como la requieres
-    # pondremos hashes de contraseñas por defecto (SHA512). 
-    # El hash abajo equivale a "Hola1234."
+    # Generamos la carpeta si el instalador tardó en crearla
+    $configDir = "C:\ProgramData\filezilla-server"
+    if (-not (Test-Path $configDir)) { New-Item -ItemType Directory -Path $configDir -Force | Out-Null }
+
+    # El hash abajo equivale a "Hola1234." (SHA512)
     $hashHola = "0081d1ba86a60394747ebc79a957d19da050eec3ef1bf61a8ef154f9a0d24e12e176ed7a25a07505d97d02cb06a090b411d33c56d78da47f985926ec0fcdeba6"
     
     $xml = @"
@@ -126,7 +145,7 @@ function Generar-Configuracion-Usuarios {
 # ====================================================================
 Clear-Host
 Write-Host "=================================================" -ForegroundColor Magenta
-        Write-Host "  LEVANTANDO FTP (FILEZILLA) - BYPASS IIS        " -ForegroundColor Magenta
+Write-Host "  LEVANTANDO FTP (FILEZILLA) - BYPASS IIS        " -ForegroundColor Magenta
 Write-Host "=================================================" -ForegroundColor Magenta
 
 # Deshabilitar IIS FTP por si acaso para liberar el puerto 21
@@ -138,6 +157,7 @@ Bajar-Instaladores
 Instalar-FileZilla
 Generar-Configuracion-Usuarios
 
+# Abrir el puerto 21 en el Firewall
 New-NetFirewallRule -DisplayName "FTP_FileZilla" -Direction Inbound -LocalPort 21 -Protocol TCP -Action Allow -ErrorAction SilentlyContinue | Out-Null
 
 Write-Host "`n=========================================" -ForegroundColor Green
