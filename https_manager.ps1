@@ -141,7 +141,7 @@ function Arrancar-Servidores-FTP {
             & $exe $script $puerto $carpeta $user $pass
         } -ArgumentList $PYTHON_EXE, $FTP_SCRIPT, $puerto, $carpeta, $FTP_USER, $FTP_PASS | Out-Null
 
-        Write-Host "  + FTP-$svc levantado en puerto $puerto -> $carpeta" -ForegroundColor Green
+        Write-Host "  + FTP-${svc} levantado en puerto $puerto -> $carpeta" -ForegroundColor Green
     }
     
     Start-Sleep -Seconds 3
@@ -184,7 +184,6 @@ function Preparar-Repositorios-FTP {
         Write-Host "  [!] Advertencia: No se pudieron descargar los ZIPs reales. Usando Dummys." -ForegroundColor Yellow
     }
 
-    # Crear hashes SHA256 obligatorios para la rúbrica
     Get-ChildItem $FTP_ROOT -Recurse -File | Where-Object { $_.Extension -notmatch '\.(sha256|md5|py)$' } | ForEach-Object {
         $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
         Set-Content "$($_.FullName).sha256" $hash -Encoding ASCII -Force
@@ -211,7 +210,7 @@ function Listar-Versiones-FTP {
 
     $versiones = $raw -split "`r`n|`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" -and $_ -notmatch '\.(sha256|md5)$' }
     
-    Write-Host "`nArchivos disponibles en FTP-$Servicio:"
+    Write-Host "`nArchivos disponibles en FTP-${Servicio}:"
     for ($i = 0; $i -lt $versiones.Count; $i++) { Write-Host "  $($i+1)) $($versiones[$i])" }
     
     $sel = Read-Host "Elige un instalador (0 para cancelar)"
@@ -305,7 +304,6 @@ function Instalar-Apache {
         Expand-Archive "$env:TEMP\apache.zip" $APACHE_DIR -Force
     }
     
-    # Ajustar rutas de carpeta que se extraen con subdirectorios
     if (Test-Path "$APACHE_DIR\Apache24") { Move-Item "$APACHE_DIR\Apache24\*" $APACHE_DIR -Force }
 
     $pHttp = Read-Host "Puerto HTTP [Enter=8080]"; if (!$pHttp) { $pHttp = 8080 }
@@ -374,6 +372,13 @@ function Mostrar-Resumen {
         } catch {
             Write-Host "  [$($p[0])] Puerto:$($p[2]) -> FALLO O TIMEOUT" -ForegroundColor Red
         }
+    }
+    
+    Write-Host "`n-- Servidores FTP Python independientes ------------------"
+    foreach ($svc in @("IIS","Apache","Nginx")) {
+        $puerto = $FTP_PUERTOS[$svc]
+        $estado = if (netstat -an | Select-String ":$puerto ") { "ACTIVO" } else { "INACTIVO" }
+        Write-Host "  [FTP-${svc}] Puerto:$puerto -> $estado"
     }
 }
 
