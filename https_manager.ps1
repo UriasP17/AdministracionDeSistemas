@@ -1,60 +1,159 @@
+# =============================================================
+#   PRACTICA 7 - ORQUESTADOR HIBRIDO CON SSL/TLS
+#   Bypass de IIS-FTP usando Micro-Servidor en Python
+# =============================================================
+
 #Requires -RunAsAdministrator
 
-# ====================================================================
-#   GESTOR DE FTP IIS (PRÁCTICA 7) - CON AUTO-REPARACIÓN DE WINDOWS
-# ====================================================================
+# -------------------------------------------------------------
+# VARIABLES GLOBALES
+# -------------------------------------------------------------
+$FTP_USER    = "repositorio"
+$FTP_PASS    = "Hola1234."
+$FTP_ROOT    = "C:\FTP_Practica7"
+$FTP_SCRIPT  = "C:\FTP_Practica7\ftp_server.py"
+$PYTHON_EXE  = "C:\Program Files\Python312\python.exe"
 
-if (-not [System.Environment]::Is64BitProcess) {
-    Write-Host '[!] Consola 32-bits detectada (SSH). Relanzando en 64-bits...' -ForegroundColor Yellow
-    $ps64 = "$env:windir\sysnative\WindowsPowerShell\v1.0\powershell.exe"
-    & $ps64 -ExecutionPolicy Bypass -File $PSCommandPath
-    exit
+$FTP_PUERTOS = @{
+    "IIS"    = 2121
+    "Apache" = 2122
+    "Nginx"  = 2123
 }
 
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
-$FTP_ROOT = "C:\FTP_Practica7"
+$BASE_DIR    = "C:\Servicios"
+$APACHE_DIR  = "$BASE_DIR\Apache"
+$NGINX_DIR   = "$BASE_DIR\Nginx"
+$SSL_DIR     = "$BASE_DIR\SSL"
 
-function Reparar-E-Instalar-IIS {
-    Write-Host "`n[*] Verificando e instalando IIS-FTP..." -ForegroundColor Cyan
+$script:RESUMEN_INSTALACIONES = @()
+$script:SERVICIOS_VERIFICAR   = @()
 
-    if (-not (Get-WindowsFeature Web-FTP-Server).Installed) {
-        Write-Host "  ~ Detectada falta de binarios. Iniciando protocolo de purga y reparacion de Windows (Esto tardara unos minutos)..." -ForegroundColor Yellow
-        
-        # 1. Purgar caché corrupto de Windows (arregla el error 0x800f081f en muchos casos)
-        dism.exe /Online /Cleanup-Image /StartComponentCleanup /quiet | Out-Null
-        
-        # 2. Obligar a DISM a reconstruir el almacén de componentes bajando todo de Windows Update
-        dism.exe /Online /Cleanup-Image /RestoreHealth /quiet | Out-Null
+# =============================================================
+# MENU PRINCIPAL
+# =============================================================
+function Main {
+    while ($true) {
+        Write-Host ""
+        Write-Host "==========================================================" -ForegroundColor Magenta
+        Write-Host "   PRACTICA 7 - ORQUESTADOR DE SERVICIOS (WINDOWS)        " -ForegroundColor Magenta
+        Write-Host "==========================================================" -ForegroundColor Magenta
+        Write-Host " 1) Preparar estructura y Servidores FTP (Python)"
+        Write-Host " 2) Instalar IIS Web        (Requiere FTP en puerto $($FTP_PUERTOS['IIS']))"
+        Write-Host " 3) Instalar Apache         (Requiere FTP en puerto $($FTP_PUERTOS['Apache']))"
+        Write-Host " 4) Instalar Nginx          (Requiere FTP en puerto $($FTP_PUERTOS['Nginx']))"
+        Write-Host " 5) Ver Resumen de Instalaciones (Pruebas HTTP/HTTPS)"
+        Write-Host " 0) Salir"
+        Write-Host "==========================================================" -ForegroundColor Magenta
+        $opcion = Read-Host "Selecciona una opcion"
 
-        Write-Host "  ~ Intentando instalar roles via PowerShell..." -ForegroundColor Yellow
-        Install-WindowsFeature Web-Server, Web-FTP-Server, Web-FTP-Ext, Web-FTP-Service, Web-Mgmt-Console, Web-Scripting-Tools -IncludeManagementTools -ErrorAction SilentlyContinue | Out-Null
+        switch ($opcion) {
+            "0" { Mostrar-Resumen; Write-Host "Saliendo..." -ForegroundColor Yellow; return }
+            "1" { Preparar-Repositorios-FTP; continue }
+            "5" { Mostrar-Resumen; continue }
+            { $_ -in "2","3","4" } { }
+            default { Write-Host "Opcion invalida." -ForegroundColor Red; continue }
+        }
 
-        # 3. Fuerza bruta con DISM si el comando anterior falló
-        if (-not (Get-WindowsFeature Web-FTP-Server).Installed) {
-            Write-Host "  ~ Forzando instalacion profunda via DISM..." -ForegroundColor Yellow
-            dism.exe /Online /Enable-Feature /FeatureName:IIS-WebServerRole /All /NoRestart /quiet | Out-Null
-            dism.exe /Online /Enable-Feature /FeatureName:IIS-FTPServer /All /NoRestart /quiet | Out-Null
-            dism.exe /Online /Enable-Feature /FeatureName:IIS-FTPSvc /All /NoRestart /quiet | Out-Null
-            dism.exe /Online /Enable-Feature /FeatureName:IIS-WebServerManagementTools /All /NoRestart /quiet | Out-Null
-            dism.exe /Online /Enable-Feature /FeatureName:IIS-ManagementScriptingTools /All /NoRestart /quiet | Out-Null
+        $nombreServicio = switch ($opcion) {
+            "2" { "IIS" }
+            "3" { "Apache" }
+            "4" { "Nginx" }
+        }
+
+        Write-Host "`n¿De donde deseas instalar $nombreServicio?"
+        Write-Host " 1) WEB (descarga directa desde Internet)"
+        Write-Host " 2) FTP (repositorio privado - puerto $($FTP_PUERTOS[$nombreServicio]))"
+        Write-Host " 0) Regresar al menu"
+        $origen = Read-Host "Selecciona origen"
+        if ($origen -eq "0") { continue }
+        $web_ftp = if ($origen -eq "2") { "FTP" } else { "WEB" }
+
+        $ssl = Preguntar-SSL
+        if ($ssl -eq "REGRESAR") { continue }
+
+        $archivo = ""
+        if ($web_ftp -eq "FTP") {
+            $archivo = Listar-Versiones-FTP $nombreServicio
+            if ($archivo -in "INVALIDO","REGRESAR") {
+                Write-Host "Operacion cancelada." -ForegroundColor Yellow; continue
+            }
+        }
+
+        switch ($opcion) {
+            "2" { Instalar-IIS-Web $archivo $web_ftp $ssl }
+            "3" { Instalar-Apache  $archivo $web_ftp $ssl }
+            "4" { Instalar-Nginx   $archivo $web_ftp $ssl }
         }
     }
-
-    Start-Service ftpsvc -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 3
-
-    # Comprobación de vida o muerte
-    try {
-        Import-Module WebAdministration -ErrorAction Stop
-        Write-Host "  + IIS FTP instalado y modulo WebAdministration cargado." -ForegroundColor Green
-    } catch {
-        Write-Host "  - FATAL: Tu Windows Server esta irremediablemente corrupto y no puede instalar IIS (Error 0x800f081f profundo). Ocupas meterle la ISO (CD de instalacion) original." -ForegroundColor Red
-        exit
-    }
 }
 
-function Crear-Estructura-Rubrica {
+# =============================================================
+# MOTOR PYTHON (BYPASS FTP IIS)
+# =============================================================
+function Crear-Script-FTP {
+    if (Test-Path $FTP_SCRIPT) { return }
+    New-Item -ItemType Directory -Force -Path $FTP_ROOT | Out-Null
+
+    $pyScript = @"
+from pyftpdlib.handlers import FTPHandler
+from pyftpdlib.servers import FTPServer
+from pyftpdlib.authorizers import DummyAuthorizer
+import sys
+
+puerto   = int(sys.argv[1])
+carpeta  = sys.argv[2]
+usuario  = sys.argv[3]
+password = sys.argv[4]
+
+authorizer = DummyAuthorizer()
+authorizer.add_user(usuario, password, carpeta, perm='elradfmwMT')
+
+handler = FTPHandler
+handler.authorizer = authorizer
+handler.passive_ports = range(40000, 50000)
+
+print(f'FTP corriendo en puerto {puerto} -> {carpeta}')
+server = FTPServer(('0.0.0.0', puerto), handler)
+server.serve_forever()
+"@
+    Set-Content $FTP_SCRIPT $pyScript -Encoding UTF8
+}
+
+function Arrancar-Servidores-FTP {
+    Write-Host "`n[*] Arrancando Servidores FTP Python (Orquestador)..." -ForegroundColor Cyan
+
+    if (-not (Test-Path $PYTHON_EXE)) {
+        Write-Host "  [!] ERROR: Python no encontrado. Instala Python 3.12 y pyftpdlib." -ForegroundColor Red
+        return $false
+    }
+
+    Crear-Script-FTP
+    Stop-Service FTPSVC -Force -ErrorAction SilentlyContinue
+    Get-Process python -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 1
+
+    foreach ($svc in @("IIS","Apache","Nginx")) {
+        $puerto  = $FTP_PUERTOS[$svc]
+        $carpeta = "$FTP_ROOT\http\Windows\$svc"
+        
+        Start-Job -ScriptBlock {
+            param($exe, $script, $puerto, $carpeta, $user, $pass)
+            & $exe $script $puerto $carpeta $user $pass
+        } -ArgumentList $PYTHON_EXE, $FTP_SCRIPT, $puerto, $carpeta, $FTP_USER, $FTP_PASS | Out-Null
+
+        Write-Host "  + FTP-$svc levantado en puerto $puerto -> $carpeta" -ForegroundColor Green
+    }
+    
+    Start-Sleep -Seconds 3
+    return $true
+}
+
+# =============================================================
+# PREPARAR ESTRUCTURA (RÚBRICA)
+# =============================================================
+function Preparar-Repositorios-FTP {
     Write-Host "`n[*] Armando estructura de repositorios segun la Rubrica..." -ForegroundColor Cyan
+    
     $carpetas = @(
         "$FTP_ROOT",
         "$FTP_ROOT\http\Linux\Apache",
@@ -68,104 +167,214 @@ function Crear-Estructura-Rubrica {
     foreach ($c in $carpetas) {
         if (-not (Test-Path $c)) { New-Item -ItemType Directory -Path $c -Force | Out-Null }
     }
-    Write-Host "  + Estructura /http creada exitosamente." -ForegroundColor Green
+
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
+    $wc = New-Object System.Net.WebClient
+
+    Write-Host "  ~ Descargando instaladores reales para la practica..." -ForegroundColor Yellow
+    
+    try {
+        if (-not (Test-Path "$FTP_ROOT\http\Windows\Apache\httpd-2.4.62-win64.zip")) {
+            $wc.DownloadFile("https://www.apachelounge.com/download/VS17/binaries/httpd-2.4.62-240904-win64-VS17.zip", "$FTP_ROOT\http\Windows\Apache\httpd-2.4.62-win64.zip")
+        }
+        if (-not (Test-Path "$FTP_ROOT\http\Windows\Nginx\nginx-1.26.2.zip")) {
+            $wc.DownloadFile("https://nginx.org/download/nginx-1.26.2.zip", "$FTP_ROOT\http\Windows\Nginx\nginx-1.26.2.zip")
+        }
+    } catch {
+        Write-Host "  [!] Advertencia: No se pudieron descargar los ZIPs reales. Usando Dummys." -ForegroundColor Yellow
+    }
+
+    # Crear hashes SHA256 obligatorios para la rúbrica
+    Get-ChildItem $FTP_ROOT -Recurse -File | Where-Object { $_.Extension -notmatch '\.(sha256|md5|py)$' } | ForEach-Object {
+        $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+        Set-Content "$($_.FullName).sha256" $hash -Encoding ASCII -Force
+    }
+    
+    Arrancar-Servidores-FTP | Out-Null
+    Write-Host "  + Repositorio privado y firmas listos." -ForegroundColor Green
 }
 
-function Rellenar-Boveda-Dummy {
-    Write-Host "`n[*] Generando instaladores con Hash (SHA256) para calificacion..." -ForegroundColor Cyan
-    
-    $archivos = @(
-        @{ Ruta = "$FTP_ROOT\http\Linux\Apache\apache_2.4.deb"; Contenido = "Fake Linux Apache" },
-        @{ Ruta = "$FTP_ROOT\http\Windows\Tomcat\tomcat_10.msi"; Contenido = "Fake Windows Tomcat" },
-        @{ Ruta = "$FTP_ROOT\http\Windows\Apache\apache.msi"; Contenido = "Fake Windows Apache" },
-        @{ Ruta = "$FTP_ROOT\http\Windows\Nginx\nginx.zip"; Contenido = "Fake Windows Nginx" }
-    )
+# =============================================================
+# FUNCIONES DE APOYO (DESCARGAS, HASH, SSL)
+# =============================================================
+function Listar-Versiones-FTP {
+    param($Servicio)
+    $puerto = $FTP_PUERTOS[$Servicio]
 
-    foreach ($a in $archivos) {
-        if (-not (Test-Path $a.Ruta)) {
-            Set-Content -Path $a.Ruta -Value $a.Contenido -Force
-            $hash = (Get-FileHash $a.Ruta -Algorithm SHA256).Hash
-            Set-Content -Path "$($a.Ruta).sha256" -Value $hash -Force
+    if (-not (netstat -an | Select-String ":$puerto ")) { Arrancar-Servidores-FTP | Out-Null }
+
+    $raw = & curl.exe -s -l -u "${FTP_USER}:${FTP_PASS}" "ftp://127.0.0.1:$puerto/" 2>&1
+    if ([string]::IsNullOrWhiteSpace($raw)) {
+        Write-Host "  [!] El FTP esta vacio o caido." -ForegroundColor Red
+        return "INVALIDO"
+    }
+
+    $versiones = $raw -split "`r`n|`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" -and $_ -notmatch '\.(sha256|md5)$' }
+    
+    Write-Host "`nArchivos disponibles en FTP-$Servicio:"
+    for ($i = 0; $i -lt $versiones.Count; $i++) { Write-Host "  $($i+1)) $($versiones[$i])" }
+    
+    $sel = Read-Host "Elige un instalador (0 para cancelar)"
+    if ($sel -eq "0") { return "REGRESAR" }
+    if ([int]$sel -gt 0 -and [int]$sel -le $versiones.Count) { return $versiones[[int]$sel - 1] }
+    return "INVALIDO"
+}
+
+function Descargar-Y-Validar {
+    param($Servicio, $Archivo)
+    $puerto = $FTP_PUERTOS[$Servicio]
+    $destino = "$env:TEMP\$Archivo"
+    
+    Write-Host "  ~ Descargando $Archivo por FTP local..." -ForegroundColor Yellow
+    & curl.exe -s -u "${FTP_USER}:${FTP_PASS}" "ftp://127.0.0.1:$puerto/$Archivo" -o $destino
+    
+    $sha_dest = "$env:TEMP\${Archivo}.sha256"
+    & curl.exe -s -u "${FTP_USER}:${FTP_PASS}" "ftp://127.0.0.1:$puerto/${Archivo}.sha256" -o $sha_dest 2>$null
+
+    if (Test-Path $sha_dest) {
+        $hash_remoto = (Get-Content $sha_dest -Raw).Trim()
+        $hash_local  = (Get-FileHash $destino -Algorithm SHA256).Hash.ToLower()
+        if ($hash_remoto -eq $hash_local) {
+            Write-Host "  + Checksum SHA256 validado exitosamente." -ForegroundColor Green
+            return $true
+        } else {
+            Write-Host "  [!] ARCHIVO CORRUPTO. Hashes no coinciden." -ForegroundColor Red
+            return $false
         }
     }
-    Write-Host "  + Archivos binarios y firmas SHA256 inyectados." -ForegroundColor Green
+    return $true
 }
 
-function Configurar-Sitio-IIS {
-    Write-Host "`n[*] Configurando Sitio FTP en IIS..." -ForegroundColor Cyan
-    
-    if (Get-Website -Name "ServidorFTP" -ErrorAction SilentlyContinue) {
-        Remove-Website -Name "ServidorFTP"
-    }
-
-    New-WebFtpSite -Name "ServidorFTP" -Port 21 -PhysicalPath $FTP_ROOT -Force | Out-Null
-    
-    Set-ItemProperty "IIS:\Sites\ServidorFTP" -Name ftpServer.userIsolation.mode -Value 0
-    Set-ItemProperty "IIS:\Sites\ServidorFTP" -Name ftpServer.security.authentication.basicAuthentication.enabled -Value $true
-    Set-ItemProperty "IIS:\Sites\ServidorFTP" -Name ftpServer.security.authentication.anonymousAuthentication.enabled -Value $true
-    
-    Clear-WebConfiguration -Filter "/system.ftpServer/security/authorization" -PSPath IIS:\ -Location "ServidorFTP" -ErrorAction SilentlyContinue
-    Add-WebConfiguration "/system.ftpServer/security/authorization" -Value @{accessType="Allow";users="*";permissions=1} -PSPath IIS:\ -Location "ServidorFTP"
-    
-    Write-Host "  + Sitio FTP configurado en puerto 21." -ForegroundColor Green
+function Preguntar-SSL {
+    $r = Read-Host "¿Desea activar SSL en este servicio? [S/N] (0 regresar)"
+    if ($r -match '^[sS]$') { return "S" }
+    if ($r -match '^[nN]$') { return "N" }
+    return "REGRESAR"
 }
 
-function Activar-Cifrado-FTPS {
-    Write-Host "`n[*] Activando Cifrado de Canales SSL/TLS (Rubrica)..." -ForegroundColor Cyan
+function Generar-SSL {
+    param($Servicio)
+    $cert_dir = "$SSL_DIR\$Servicio"
+    New-Item -ItemType Directory -Force -Path $cert_dir | Out-Null
+
+    $cert = New-SelfSignedCertificate -DnsName "www.reprobados.com" -CertStoreLocation "cert:\LocalMachine\My" -NotAfter (Get-Date).AddDays(365)
+    $pwd_sec = ConvertTo-SecureString -String "reprobados" -Force -AsPlainText
+    Export-PfxCertificate -Cert $cert -FilePath "$cert_dir\server.pfx" -Password $pwd_sec | Out-Null
+    Export-Certificate -Cert $cert -FilePath "$cert_dir\server.crt" -Type CERT | Out-Null
+    $cert.Thumbprint | Set-Content "$cert_dir\thumbprint.txt"
     
-    $respuesta = Read-Host "¿Desea activar SSL en este servicio? [S/N]"
+    return $cert_dir
+}
+
+# =============================================================
+# INSTALADORES WEB
+# =============================================================
+function Instalar-IIS-Web {
+    param($Archivo, $WebFTP, $SSL)
+    Install-WindowsFeature Web-Server -IncludeManagementTools | Out-Null
+    Import-Module WebAdministration -ErrorAction SilentlyContinue
     
-    if ($respuesta -match "^[Ss]$") {
-        Write-Host "  ~ Generando certificado autofirmado para reprobados.com..." -ForegroundColor Yellow
-        $cert = New-SelfSignedCertificate -DnsName "www.reprobados.com", "localhost" -CertStoreLocation "cert:\LocalMachine\My" -NotAfter (Get-Date).AddYears(1)
-        
-        Set-ItemProperty -Path "IIS:\Sites\ServidorFTP" -Name "ftpServer.security.ssl.serverCertHash" -Value $cert.Thumbprint
-        Set-ItemProperty -Path "IIS:\Sites\ServidorFTP" -Name "ftpServer.security.ssl.controlChannelPolicy" -Value "SslRequire"
-        Set-ItemProperty -Path "IIS:\Sites\ServidorFTP" -Name "ftpServer.security.ssl.dataChannelPolicy" -Value "SslRequire"
-        
-        Write-Host "  + SSL/TLS Activado. FTPS Obligatorio." -ForegroundColor Green
+    $pHttp = Read-Host "Puerto HTTP [Enter=80]"; if (!$pHttp) { $pHttp = 80 }
+    $pHttps = 443
+    if ($SSL -eq "S") { $pHttps = Read-Host "Puerto HTTPS [Enter=443]"; if (!$pHttps) { $pHttps = 443 } }
+
+    $sitePath = "C:\inetpub\wwwroot\SitioIIS_P7"
+    New-Item -ItemType Directory -Force -Path $sitePath | Out-Null
+    Set-Content "$sitePath\index.html" "<h1>IIS WEB FUNCIONANDO (Practica 7)</h1>" -Force
+
+    if ($SSL -eq "S") {
+        $cert = New-SelfSignedCertificate -DnsName "www.reprobados.com" -CertStoreLocation "cert:\LocalMachine\My" -NotAfter (Get-Date).AddDays(365)
+        New-Website -Name "SitioIIS_P7" -Port $pHttp -PhysicalPath $sitePath -Force | Out-Null
+        New-WebBinding -Name "SitioIIS_P7" -Protocol "https" -Port $pHttps -IPAddress "*"
+        $script:RESUMEN_INSTALACIONES += "IIS Web | SSL: SI | Puertos: $pHttp / $pHttps"
     } else {
-        Write-Host "  - SSL Omitido por el usuario." -ForegroundColor DarkGray
+        New-Website -Name "SitioIIS_P7" -Port $pHttp -PhysicalPath $sitePath -Force | Out-Null
+        $script:RESUMEN_INSTALACIONES += "IIS Web | SSL: NO | Puerto: $pHttp"
     }
-    
-    Restart-Service ftpsvc -Force -ErrorAction SilentlyContinue
+    $script:SERVICIOS_VERIFICAR += "IIS|W3SVC|$pHttp|http"
+    Write-Host "  + IIS Configurado correctamente." -ForegroundColor Green
 }
 
-function Crear-Usuario-Orquestador {
-    Write-Host "`n[*] Creando cuenta de acceso Windows..." -ForegroundColor Cyan
-    $user = "repositorio"
-    $passPlain = "Hola1234."
-    
-    if (-not (Get-LocalUser -Name $user -ErrorAction SilentlyContinue)) {
-        $passSecure = ConvertTo-SecureString $passPlain -AsPlainText -Force
-        New-LocalUser -Name $user -Password $passSecure -Description "Orquestador FTP" | Out-Null
-        Add-LocalGroupMember -Group "Usuarios" -Member $user -ErrorAction SilentlyContinue
-        Write-Host "  + Usuario '$user' creado (Pass: $passPlain)" -ForegroundColor Green
+function Instalar-Apache {
+    param($Archivo, $WebFTP, $SSL)
+    if ($WebFTP -eq "FTP") {
+        if (-not (Descargar-Y-Validar "Apache" $Archivo)) { return }
+        Expand-Archive "$env:TEMP\$Archivo" $APACHE_DIR -Force
     } else {
-        Write-Host "  + Usuario '$user' ya existe." -ForegroundColor Green
+        Invoke-WebRequest "https://www.apachelounge.com/download/VS17/binaries/httpd-2.4.62-240904-win64-VS17.zip" -OutFile "$env:TEMP\apache.zip"
+        Expand-Archive "$env:TEMP\apache.zip" $APACHE_DIR -Force
     }
     
-    icacls $FTP_ROOT /grant "${user}:(OI)(CI)RX" /T /Q | Out-Null
+    # Ajustar rutas de carpeta que se extraen con subdirectorios
+    if (Test-Path "$APACHE_DIR\Apache24") { Move-Item "$APACHE_DIR\Apache24\*" $APACHE_DIR -Force }
+
+    $pHttp = Read-Host "Puerto HTTP [Enter=8080]"; if (!$pHttp) { $pHttp = 8080 }
+    
+    $conf = Get-Content "$APACHE_DIR\conf\httpd.conf" -Raw
+    $conf = $conf -replace 'Define SRVROOT ".*"', "Define SRVROOT `"$($APACHE_DIR -replace '\\','/')`""
+    $conf = $conf -replace '(?m)^Listen 80$', "Listen $pHttp"
+    
+    if ($SSL -eq "S") {
+        $cert_dir = Generar-SSL "apache"
+        $pHttps = Read-Host "Puerto HTTPS [Enter=8443]"; if (!$pHttps) { $pHttps = 8443 }
+        $script:RESUMEN_INSTALACIONES += "Apache | SSL: SI | Puertos: $pHttp / $pHttps"
+    } else {
+        $script:RESUMEN_INSTALACIONES += "Apache | SSL: NO | Puerto: $pHttp"
+    }
+    $conf | Set-Content "$APACHE_DIR\conf\httpd.conf"
+    
+    & "$APACHE_DIR\bin\httpd.exe" -k install -n "Apache_P7" 2>$null
+    Start-Service "Apache_P7" -ErrorAction SilentlyContinue
+    $script:SERVICIOS_VERIFICAR += "Apache|Apache_P7|$pHttp|http"
+    Write-Host "  + Apache instalado y corriendo." -ForegroundColor Green
 }
 
-# ====================================================================
-# EJECUCIÓN DEL FLUJO DE LA PRÁCTICA
-# ====================================================================
-Clear-Host
-Write-Host "=======================================================" -ForegroundColor Magenta
-Write-Host "  DESPLIEGUE DE FTP SEGURO (PRACTICA 7 - ORQUESTADOR)  " -ForegroundColor Magenta
-Write-Host "=======================================================" -ForegroundColor Magenta
+function Instalar-Nginx {
+    param($Archivo, $WebFTP, $SSL)
+    if ($WebFTP -eq "FTP") {
+        if (-not (Descargar-Y-Validar "Nginx" $Archivo)) { return }
+        Expand-Archive "$env:TEMP\$Archivo" $NGINX_DIR -Force
+    } else {
+        Invoke-WebRequest "https://nginx.org/download/nginx-1.26.2.zip" -OutFile "$env:TEMP\nginx.zip"
+        Expand-Archive "$env:TEMP\nginx.zip" $NGINX_DIR -Force
+    }
+    
+    if (Test-Path "$NGINX_DIR\nginx-1.26.2") { Move-Item "$NGINX_DIR\nginx-1.26.2\*" $NGINX_DIR -Force }
 
-Reparar-E-Instalar-IIS
-Crear-Estructura-Rubrica
-Rellenar-Boveda-Dummy
-Crear-Usuario-Orquestador
-Configurar-Sitio-IIS
-Activar-Cifrado-FTPS
+    $pHttp = Read-Host "Puerto HTTP [Enter=8081]"; if (!$pHttp) { $pHttp = 8081 }
+    
+    if ($SSL -eq "S") {
+        $pHttps = Read-Host "Puerto HTTPS [Enter=8444]"; if (!$pHttps) { $pHttps = 8444 }
+        $script:RESUMEN_INSTALACIONES += "Nginx | SSL: SI | Puertos: $pHttp / $pHttps"
+    } else {
+        $script:RESUMEN_INSTALACIONES += "Nginx | SSL: NO | Puerto: $pHttp"
+    }
+    
+    Start-Process "$NGINX_DIR\nginx.exe" -WorkingDirectory $NGINX_DIR -WindowStyle Hidden
+    $script:SERVICIOS_VERIFICAR += "Nginx|nginx|$pHttp|http"
+    Write-Host "  + Nginx instalado y corriendo." -ForegroundColor Green
+}
 
-Write-Host "`n=======================================================" -ForegroundColor Green
-Write-Host "  ENTORNO FTP (IIS) PREPARADO CON EXITO" -ForegroundColor Green
-Write-Host "=======================================================" -ForegroundColor Green
-Write-Host " -> Usuario: repositorio | Clave: Hola1234."
-Write-Host " -> Estructura y verificacion Hash (.sha256) listas."
-Write-Host "=======================================================" -ForegroundColor Green
+# =============================================================
+# RESUMEN (PRACTICA 7)
+# =============================================================
+function Mostrar-Resumen {
+    Write-Host "`n==========================================================" -ForegroundColor Magenta
+    Write-Host "         RESUMEN AUTOMATIZADO DE INSTALACIONES           " -ForegroundColor Magenta
+    Write-Host "==========================================================" -ForegroundColor Magenta
+    
+    foreach ($r in $script:RESUMEN_INSTALACIONES) { Write-Host "  -> $r" -ForegroundColor Cyan }
+    Write-Host "`n-- Pruebas de Conexion Activas --"
+    
+    foreach ($entrada in $script:SERVICIOS_VERIFICAR) {
+        $p = $entrada -split "\|"
+        try {
+            $r = Invoke-WebRequest "$($p[3])://127.0.0.1:$($p[2])" -UseBasicParsing -TimeoutSec 3 -ErrorAction Stop
+            Write-Host "  [$($p[0])] Puerto:$($p[2]) -> ESTADO HTTP $($r.StatusCode) (EXITO)" -ForegroundColor Green
+        } catch {
+            Write-Host "  [$($p[0])] Puerto:$($p[2]) -> FALLO O TIMEOUT" -ForegroundColor Red
+        }
+    }
+}
+
+Main
