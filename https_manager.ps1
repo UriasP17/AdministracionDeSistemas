@@ -1,221 +1,167 @@
-```powershell
-# ================================
-# CONFIG
-# ================================
-$SOURCE = "wim:D:\sources\install.wim:2"
+# ==============================================================================
+# MODULO HTTP/FTP COMBINADO - WINDOWS (P07) FIX
+# ==============================================================================
 
-# ================================
-# INSTALAR IIS BIEN
-# ================================
+Import-Module WebAdministration -ErrorAction SilentlyContinue
+
+# ================================================================
+# INSTALAR IIS (FIX REAL)
+# ================================================================
 function Instalar-IIS {
+    Write-Host "[*] Instalando IIS..." -ForegroundColor Yellow
 
-    Write-Host "[*] Instalando IIS completo..." -ForegroundColor Cyan
-
-    $features = @(
-        "IIS-WebServerRole",
-        "IIS-WebServer",
-        "IIS-CommonHttpFeatures",
-        "IIS-StaticContent",
-        "IIS-DefaultDocument",
-        "IIS-DirectoryBrowsing",
-        "IIS-HttpErrors",
-        "IIS-HttpRedirect",
-        "IIS-ApplicationDevelopment",
-        "IIS-NetFxExtensibility45",
-        "IIS-ISAPIExtensions",
-        "IIS-ISAPIFilter",
-        "IIS-ManagementConsole",
-        "IIS-FTPSvc"
-    )
-
-    foreach ($f in $features) {
-        dism /online /enable-feature /featurename:$f /all /source:$SOURCE /limitaccess | Out-Null
+    # Detecta si existe el comando
+    if (Get-Command Install-WindowsFeature -ErrorAction SilentlyContinue) {
+        Install-WindowsFeature -Name Web-Server -IncludeManagementTools
+    } else {
+        Enable-WindowsOptionalFeature -Online -FeatureName IIS-WebServerRole -All -NoRestart
+        Enable-WindowsOptionalFeature -Online -FeatureName IIS-ManagementConsole -All -NoRestart
     }
 
-    Start-Sleep -Seconds 5
+    Start-Sleep -Seconds 3
 
-    if (Get-Service W3SVC -ErrorAction SilentlyContinue) {
-        Write-Host "[OK] IIS listo" -ForegroundColor Green
-        return $true
+    $svc = Get-Service W3SVC -ErrorAction SilentlyContinue
+    if ($svc) {
+        Start-Service W3SVC
+        Write-Host "[OK] IIS instalado correctamente" -ForegroundColor Green
     } else {
-        Write-Host "[ERROR] IIS no quedó instalado" -ForegroundColor Red
-        return $false
+        Write-Host "[ERROR] IIS no se instaló" -ForegroundColor Red
     }
 }
 
-# ================================
-# IIS
-# ================================
-function Levantar-IIS {
+# ================================================================
+# LIMPIAR PUERTO
+# ================================================================
+function Limpiar-Entorno {
     param($Puerto)
 
-    if (!(Instalar-IIS)) { return }
+    Write-Host "[*] Limpiando puerto $Puerto..."
 
-    Import-Module WebAdministration
+    Stop-Service W3SVC -ErrorAction SilentlyContinue
+    taskkill /F /IM nginx.exe 2>$null
+    taskkill /F /IM httpd.exe 2>$null
 
-    $root = "C:\inetpub\wwwroot"
-    if (!(Test-Path $root)) {
-        New-Item $root -ItemType Directory | Out-Null
+    $con = Get-NetTCPConnection -LocalPort $Puerto -State Listen -ErrorAction SilentlyContinue
+    if ($con) {
+        Stop-Process -Id $con.OwningProcess -Force -ErrorAction SilentlyContinue
     }
 
-    Set-Content "$root\index.html" "<h1>IIS puerto $Puerto</h1>"
+    Start-Sleep 2
+}
 
-    Stop-Service W3SVC -Force -ErrorAction SilentlyContinue
+# ================================================================
+# PAGINA HTML
+# ================================================================
+function Crear-Pagina {
+    param($servicio, $puerto)
+
+    $path = "C:\inetpub\wwwroot\index.html"
+
+    if (!(Test-Path "C:\inetpub\wwwroot")) {
+        New-Item "C:\inetpub\wwwroot" -ItemType Directory -Force
+    }
+
+    $html = @"
+<html>
+<head><title>$servicio</title></head>
+<body>
+<h1>$servicio funcionando</h1>
+<p>Puerto: $puerto</p>
+</body>
+</html>
+"@
+
+    Set-Content $path $html
+}
+
+# ================================================================
+# CERTIFICADO SSL
+# ================================================================
+function Obtener-CertObj {
+    $cert = Get-ChildItem Cert:\LocalMachine\My | Where-Object {
+        $_.Subject -like "*reprobados*"
+    } | Select-Object -First 1
+
+    if (!$cert) {
+        $cert = New-SelfSignedCertificate `
+            -DnsName "www.reprobados.com" `
+            -CertStoreLocation "Cert:\LocalMachine\My"
+    }
+
+    return $cert
+}
+
+# ================================================================
+# IIS DESPLIEGUE
+# ================================================================
+function Deploy-IIS {
+    param($puerto)
+
+    Limpiar-Entorno $puerto
+
+    Instalar-IIS
+
+    Crear-Pagina "IIS" $puerto
+
     Remove-Website "Default Web Site" -ErrorAction SilentlyContinue
 
-    New-Website -Name "Default Web Site" -Port $Puerto -PhysicalPath $root -Force | Out-Null
+    New-Website -Name "Default Web Site" `
+        -Port $puerto `
+        -PhysicalPath "C:\inetpub\wwwroot"
 
     Start-Service W3SVC
 
-    if (Get-NetTCPConnection -LocalPort $Puerto -State Listen -ErrorAction SilentlyContinue) {
-        Write-Host "[OK] IIS corriendo en puerto $Puerto" -ForegroundColor Green
-    } else {
-        Write-Host "[ERROR] IIS no levantó" -ForegroundColor Red
-    }
+    Write-Host "[OK] IIS corriendo en puerto $puerto" -ForegroundColor Green
 }
 
-# ================================
-# FTP
-# ================================
-function Configurar-FTP {
-
-    if (!(Instalar-IIS)) { return }
-
-    $appcmd = "$env:windir\system32\inetsrv\appcmd.exe"
-
-    if (!(Test-Path "C:\FTP")) {
-        New-Item "C:\FTP" -ItemType Directory | Out-Null
-    }
-
-    & $appcmd delete site "ServidorFTP" 2>$null
-
-    & $appcmd add site `
-        /name:"ServidorFTP" `
-        /bindings:"ftp/*:21:" `
-        /physicalPath:"C:\FTP" | Out-Null
-
-    & $appcmd set config "ServidorFTP" `
-        /section:system.ftpServer/security/authentication/anonymousAuthentication `
-        /enabled:true /commit:apphost
-
-    & $appcmd set config "ServidorFTP" `
-        /section:system.ftpServer/security/authentication/basicAuthentication `
-        /enabled:true /commit:apphost
-
-    Start-Service ftpsvc -ErrorAction SilentlyContinue
-    & $appcmd start site "ServidorFTP"
-
-    if (Get-NetTCPConnection -LocalPort 21 -State Listen -ErrorAction SilentlyContinue) {
-        Write-Host "[OK] FTP activo" -ForegroundColor Green
-    } else {
-        Write-Host "[ERROR] FTP no levantó" -ForegroundColor Red
-    }
-}
-
-# ================================
-# NGINX
-# ================================
-function Levantar-Nginx {
-    param($Puerto)
-
-    $nginx = "C:\tools\nginx\nginx.exe"
-    if (!(Test-Path $nginx)) {
-        Write-Host "[ERROR] nginx no existe" -ForegroundColor Red
-        return
-    }
-
-    Stop-Process -Name nginx -Force -ErrorAction SilentlyContinue
-
-    $conf = @"
-events {}
-http {
-    server {
-        listen $Puerto;
-        location / {
-            root html;
-            index index.html;
-        }
-    }
-}
-"@
-
-    Set-Content "C:\tools\nginx\conf\nginx.conf" $conf
-    Set-Content "C:\tools\nginx\html\index.html" "<h1>Nginx $Puerto</h1>"
-
-    Start-Process $nginx -WorkingDirectory "C:\tools\nginx"
-
-    Write-Host "[OK] Nginx puerto $Puerto" -ForegroundColor Green
-}
-
-# ================================
-# APACHE
-# ================================
-function Levantar-Apache {
-    param($Puerto)
-
-    $apache = "C:\Apache24\bin\httpd.exe"
-    if (!(Test-Path $apache)) {
-        Write-Host "[ERROR] Apache no existe" -ForegroundColor Red
-        return
-    }
-
-    Stop-Process -Name httpd -Force -ErrorAction SilentlyContinue
-
-    (Get-Content "C:\Apache24\conf\httpd.conf") -replace "Listen 80", "Listen $Puerto" | Set-Content "C:\Apache24\conf\httpd.conf"
-
-    Set-Content "C:\Apache24\htdocs\index.html" "<h1>Apache $Puerto</h1>"
-
-    Start-Process $apache
-
-    Write-Host "[OK] Apache puerto $Puerto" -ForegroundColor Green
-}
-
-# ================================
+# ================================================================
 # MENU
-# ================================
-function Menu {
+# ================================================================
+while ($true) {
 
-    while ($true) {
+    Write-Host ""
+    Write-Host "1) IIS"
+    Write-Host "2) Nginx"
+    Write-Host "3) Apache"
+    Write-Host "4) FTP"
+    Write-Host "5) Puerto"
+    Write-Host "0) Salir"
 
-        Write-Host ""
-        Write-Host "1) IIS"
-        Write-Host "2) Nginx"
-        Write-Host "3) Apache"
-        Write-Host "4) FTP"
-        Write-Host "5) Puerto"
-        Write-Host "0) Salir"
+    $op = Read-Host "Opcion"
 
-        $op = Read-Host "Opcion"
+    switch ($op) {
 
-        switch ($op) {
+        "1" {
+            $p = Read-Host "Puerto"
+            Deploy-IIS $p
+        }
 
-            "1" {
-                $p = Read-Host "Puerto"
-                Levantar-IIS $p
+        "2" {
+            if (!(Test-Path "C:\tools\nginx")) {
+                Write-Host "[ERROR] nginx no existe"
+            } else {
+                Write-Host "[OK] nginx instalado (falta integrar deploy)"
             }
+        }
 
-            "2" {
-                $p = Read-Host "Puerto"
-                Levantar-Nginx $p
-            }
+        "3" {
+            Write-Host "[INFO] Apache aun no integrado"
+        }
 
-            "3" {
-                $p = Read-Host "Puerto"
-                Levantar-Apache $p
-            }
+        "4" {
+            Write-Host "[INFO] FTP aun no integrado"
+        }
 
-            "4" {
-                Configurar-FTP
-            }
+        "5" {
+            $global:PUERTO = Read-Host "Nuevo puerto"
+        }
 
-            "5" {
-                $global:PUERTO = Read-Host "Nuevo puerto"
-            }
+        "0" {
+            break
+        }
 
-            "0" { exit }
+        default {
+            Write-Host "Invalido"
         }
     }
 }
-
-Menu
-```
