@@ -1,11 +1,9 @@
 #Requires -RunAsAdministrator
 
 # ====================================================================
-#   GESTOR DE FTP IIS (PRÁCTICA 7 - ORQUESTACIÓN HÍBRIDA)
-#   CUMPLE REQUERIMIENTOS: IIS-FTP, FTPS SSL/TLS, ESTRUCTURA /HTTP
+#   GESTOR DE FTP IIS (PRÁCTICA 7) - CON AUTO-REPARACIÓN DE WINDOWS
 # ====================================================================
 
-# Forzar PowerShell 64 bits si estamos por SSH
 if (-not [System.Environment]::Is64BitProcess) {
     Write-Host '[!] Consola 32-bits detectada (SSH). Relanzando en 64-bits...' -ForegroundColor Yellow
     $ps64 = "$env:windir\sysnative\WindowsPowerShell\v1.0\powershell.exe"
@@ -16,27 +14,42 @@ if (-not [System.Environment]::Is64BitProcess) {
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
 $FTP_ROOT = "C:\FTP_Practica7"
 
-function Instalar-IIS-FTP {
-    Write-Host "`n[*] Instalando Rol de IIS-FTP a la fuerza bruta..." -ForegroundColor Cyan
-    
-    # Truco maestro para el error 0x800f081f: decirle que baje los binarios faltantes de Windows Update
-    Install-WindowsFeature Web-FTP-Server, Web-FTP-Ext, Web-FTP-Service, Web-Mgmt-Console -IncludeManagementTools -ErrorAction SilentlyContinue | Out-Null
-    
-    if (-not (Get-Service ftpsvc -ErrorAction SilentlyContinue)) {
-        Write-Host "  ~ Fallo instalacion normal. Usando DISM con descarga desde Windows Update..." -ForegroundColor Yellow
-        # El switch /LimitAccess evita el bloqueo de red local y baja de MS
-        dism.exe /Online /Enable-Feature /FeatureName:IIS-WebServerRole /All /NoRestart /quiet | Out-Null
-        dism.exe /Online /Enable-Feature /FeatureName:IIS-FTPServer /All /NoRestart /quiet | Out-Null
-        dism.exe /Online /Enable-Feature /FeatureName:IIS-FTPSvc /All /NoRestart /quiet | Out-Null
+function Reparar-E-Instalar-IIS {
+    Write-Host "`n[*] Verificando e instalando IIS-FTP..." -ForegroundColor Cyan
+
+    if (-not (Get-WindowsFeature Web-FTP-Server).Installed) {
+        Write-Host "  ~ Detectada falta de binarios. Iniciando protocolo de purga y reparacion de Windows (Esto tardara unos minutos)..." -ForegroundColor Yellow
+        
+        # 1. Purgar caché corrupto de Windows (arregla el error 0x800f081f en muchos casos)
+        dism.exe /Online /Cleanup-Image /StartComponentCleanup /quiet | Out-Null
+        
+        # 2. Obligar a DISM a reconstruir el almacén de componentes bajando todo de Windows Update
+        dism.exe /Online /Cleanup-Image /RestoreHealth /quiet | Out-Null
+
+        Write-Host "  ~ Intentando instalar roles via PowerShell..." -ForegroundColor Yellow
+        Install-WindowsFeature Web-Server, Web-FTP-Server, Web-FTP-Ext, Web-FTP-Service, Web-Mgmt-Console, Web-Scripting-Tools -IncludeManagementTools -ErrorAction SilentlyContinue | Out-Null
+
+        # 3. Fuerza bruta con DISM si el comando anterior falló
+        if (-not (Get-WindowsFeature Web-FTP-Server).Installed) {
+            Write-Host "  ~ Forzando instalacion profunda via DISM..." -ForegroundColor Yellow
+            dism.exe /Online /Enable-Feature /FeatureName:IIS-WebServerRole /All /NoRestart /quiet | Out-Null
+            dism.exe /Online /Enable-Feature /FeatureName:IIS-FTPServer /All /NoRestart /quiet | Out-Null
+            dism.exe /Online /Enable-Feature /FeatureName:IIS-FTPSvc /All /NoRestart /quiet | Out-Null
+            dism.exe /Online /Enable-Feature /FeatureName:IIS-WebServerManagementTools /All /NoRestart /quiet | Out-Null
+            dism.exe /Online /Enable-Feature /FeatureName:IIS-ManagementScriptingTools /All /NoRestart /quiet | Out-Null
+        }
     }
 
     Start-Service ftpsvc -ErrorAction SilentlyContinue
-    Import-Module WebAdministration -ErrorAction SilentlyContinue
-    
-    if (Get-Service ftpsvc -ErrorAction SilentlyContinue) {
-        Write-Host "  + IIS FTP instalado y corriendo." -ForegroundColor Green
-    } else {
-        Write-Host "  - ERROR CRITICO: Tu Windows Server tiene el repositorio de roles corrupto." -ForegroundColor Red
+    Start-Sleep -Seconds 3
+
+    # Comprobación de vida o muerte
+    try {
+        Import-Module WebAdministration -ErrorAction Stop
+        Write-Host "  + IIS FTP instalado y modulo WebAdministration cargado." -ForegroundColor Green
+    } catch {
+        Write-Host "  - FATAL: Tu Windows Server esta irremediablemente corrupto y no puede instalar IIS (Error 0x800f081f profundo). Ocupas meterle la ISO (CD de instalacion) original." -ForegroundColor Red
+        exit
     }
 }
 
@@ -61,9 +74,6 @@ function Crear-Estructura-Rubrica {
 function Rellenar-Boveda-Dummy {
     Write-Host "`n[*] Generando instaladores con Hash (SHA256) para calificacion..." -ForegroundColor Cyan
     
-    # Llenamos las carpetas con archivos "dummy" y sus Hashes para que tu script Orquestador 
-    # pueda hacer la verificación de integridad (.sha256) que pide el profe.
-    
     $archivos = @(
         @{ Ruta = "$FTP_ROOT\http\Linux\Apache\apache_2.4.deb"; Contenido = "Fake Linux Apache" },
         @{ Ruta = "$FTP_ROOT\http\Windows\Tomcat\tomcat_10.msi"; Contenido = "Fake Windows Tomcat" },
@@ -74,7 +84,6 @@ function Rellenar-Boveda-Dummy {
     foreach ($a in $archivos) {
         if (-not (Test-Path $a.Ruta)) {
             Set-Content -Path $a.Ruta -Value $a.Contenido -Force
-            # Se genera el hash exactamente como pide la rubrica (.sha256)
             $hash = (Get-FileHash $a.Ruta -Algorithm SHA256).Hash
             Set-Content -Path "$($a.Ruta).sha256" -Value $hash -Force
         }
@@ -84,32 +93,25 @@ function Rellenar-Boveda-Dummy {
 
 function Configurar-Sitio-IIS {
     Write-Host "`n[*] Configurando Sitio FTP en IIS..." -ForegroundColor Cyan
-    Import-Module WebAdministration
     
-    # Borrar si ya existía para evitar conflictos
     if (Get-Website -Name "ServidorFTP" -ErrorAction SilentlyContinue) {
         Remove-Website -Name "ServidorFTP"
     }
 
-    Write-Host "  ~ Creando sitio apuntando a $FTP_ROOT..." -ForegroundColor Yellow
     New-WebFtpSite -Name "ServidorFTP" -Port 21 -PhysicalPath $FTP_ROOT -Force | Out-Null
     
-    # Quitamos aislamiento de usuarios para que el usuario del Orquestador pueda navegar toda la carpeta
     Set-ItemProperty "IIS:\Sites\ServidorFTP" -Name ftpServer.userIsolation.mode -Value 0
-    
-    # Habilitamos autenticación básica y anónima
     Set-ItemProperty "IIS:\Sites\ServidorFTP" -Name ftpServer.security.authentication.basicAuthentication.enabled -Value $true
     Set-ItemProperty "IIS:\Sites\ServidorFTP" -Name ftpServer.security.authentication.anonymousAuthentication.enabled -Value $true
     
-    # Permisos de Lectura para todos (para que el Orquestador pueda listar archivos)
+    Clear-WebConfiguration -Filter "/system.ftpServer/security/authorization" -PSPath IIS:\ -Location "ServidorFTP" -ErrorAction SilentlyContinue
     Add-WebConfiguration "/system.ftpServer/security/authorization" -Value @{accessType="Allow";users="*";permissions=1} -PSPath IIS:\ -Location "ServidorFTP"
     
-    Write-Host "  + Sitio FTP configurado." -ForegroundColor Green
+    Write-Host "  + Sitio FTP configurado en puerto 21." -ForegroundColor Green
 }
 
 function Activar-Cifrado-FTPS {
     Write-Host "`n[*] Activando Cifrado de Canales SSL/TLS (Rubrica)..." -ForegroundColor Cyan
-    Import-Module WebAdministration
     
     $respuesta = Read-Host "¿Desea activar SSL en este servicio? [S/N]"
     
@@ -117,7 +119,6 @@ function Activar-Cifrado-FTPS {
         Write-Host "  ~ Generando certificado autofirmado para reprobados.com..." -ForegroundColor Yellow
         $cert = New-SelfSignedCertificate -DnsName "www.reprobados.com", "localhost" -CertStoreLocation "cert:\LocalMachine\My" -NotAfter (Get-Date).AddYears(1)
         
-        Write-Host "  ~ Forzando Tunel SSL en canal de control y datos..." -ForegroundColor Yellow
         Set-ItemProperty -Path "IIS:\Sites\ServidorFTP" -Name "ftpServer.security.ssl.serverCertHash" -Value $cert.Thumbprint
         Set-ItemProperty -Path "IIS:\Sites\ServidorFTP" -Name "ftpServer.security.ssl.controlChannelPolicy" -Value "SslRequire"
         Set-ItemProperty -Path "IIS:\Sites\ServidorFTP" -Name "ftpServer.security.ssl.dataChannelPolicy" -Value "SslRequire"
@@ -144,7 +145,6 @@ function Crear-Usuario-Orquestador {
         Write-Host "  + Usuario '$user' ya existe." -ForegroundColor Green
     }
     
-    # Permisos NTFS en la carpeta
     icacls $FTP_ROOT /grant "${user}:(OI)(CI)RX" /T /Q | Out-Null
 }
 
@@ -156,7 +156,7 @@ Write-Host "=======================================================" -Foreground
 Write-Host "  DESPLIEGUE DE FTP SEGURO (PRACTICA 7 - ORQUESTADOR)  " -ForegroundColor Magenta
 Write-Host "=======================================================" -ForegroundColor Magenta
 
-Instalar-IIS-FTP
+Reparar-E-Instalar-IIS
 Crear-Estructura-Rubrica
 Rellenar-Boveda-Dummy
 Crear-Usuario-Orquestador
@@ -166,9 +166,6 @@ Activar-Cifrado-FTPS
 Write-Host "`n=======================================================" -ForegroundColor Green
 Write-Host "  ENTORNO FTP (IIS) PREPARADO CON EXITO" -ForegroundColor Green
 Write-Host "=======================================================" -ForegroundColor Green
-Write-Host " -> Puedes probar la conexion desde tu orquestador web usando:"
-Write-Host "    Usuario: repositorio"
-Write-Host "    Clave:   Hola1234."
-Write-Host " -> Estructura lista para navegacion dinamica (ej. /http/Windows/Apache/)"
-Write-Host " -> Verificacion Hash lista (archivos .sha256 creados)"
+Write-Host " -> Usuario: repositorio | Clave: Hola1234."
+Write-Host " -> Estructura y verificacion Hash (.sha256) listas."
 Write-Host "=======================================================" -ForegroundColor Green
