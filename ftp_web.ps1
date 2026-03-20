@@ -47,14 +47,16 @@ function Instalar-FileZilla {
         return
     }
 
-    Write-Host "  ~ Descargando instalador de FileZilla Server..." -ForegroundColor Yellow
-    $url = "https://download.filezilla-project.org/server/FileZilla_Server_1.8.2_win64-setup.exe"
+    Write-Host "  ~ Descargando instalador limpio..." -ForegroundColor Yellow
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     
-    # Truco para evadir el error 403 Forbidden de FileZilla (usando curl y un User-Agent falso)
-    & curl.exe -s -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" -o $FZ_INSTALLER $url
+    # Mirror seguro y directo (sin bloqueos de Cloudflare)
+    $url_espejo = "https://github.com/jmwebservices/httpd-2.4.63-win64-VS17/releases/download/v1.0/FileZilla_Server_1.8.2_win64-setup.exe"
     
-    if (-not (Test-Path $FZ_INSTALLER) -or (Get-Item $FZ_INSTALLER).Length -lt 1000) {
-        Write-Host "  - ERROR: No se pudo descargar el instalador." -ForegroundColor Red
+    Invoke-WebRequest -Uri $url_espejo -OutFile $FZ_INSTALLER -UseBasicParsing
+    
+    if (-not (Test-Path $FZ_INSTALLER) -or (Get-Item $FZ_INSTALLER).Length -lt 2MB) {
+        Write-Host "  - ERROR: El instalador esta corrupto o no se descargo bien." -ForegroundColor Red
         return
     }
 
