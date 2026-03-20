@@ -1,20 +1,29 @@
 ```powershell
 # ================================
-# CONFIG GLOBAL
+# CONFIG
 # ================================
 $SOURCE = "wim:D:\sources\install.wim:2"
-Import-Module WebAdministration -ErrorAction SilentlyContinue
 
 # ================================
-# INSTALAR IIS + FTP (FIX REAL)
+# INSTALAR IIS BIEN
 # ================================
-function Instalar-IIS-FTP {
+function Instalar-IIS {
 
-    Write-Host "[*] Instalando IIS + FTP..." -ForegroundColor Cyan
+    Write-Host "[*] Instalando IIS completo..." -ForegroundColor Cyan
 
     $features = @(
         "IIS-WebServerRole",
         "IIS-WebServer",
+        "IIS-CommonHttpFeatures",
+        "IIS-StaticContent",
+        "IIS-DefaultDocument",
+        "IIS-DirectoryBrowsing",
+        "IIS-HttpErrors",
+        "IIS-HttpRedirect",
+        "IIS-ApplicationDevelopment",
+        "IIS-NetFxExtensibility45",
+        "IIS-ISAPIExtensions",
+        "IIS-ISAPIFilter",
         "IIS-ManagementConsole",
         "IIS-FTPSvc"
     )
@@ -25,50 +34,52 @@ function Instalar-IIS-FTP {
 
     Start-Sleep -Seconds 5
 
-    $svc = Get-Service W3SVC -ErrorAction SilentlyContinue
-    if (!$svc) {
-        Write-Host "[ERROR] IIS no se instaló" -ForegroundColor Red
+    if (Get-Service W3SVC -ErrorAction SilentlyContinue) {
+        Write-Host "[OK] IIS listo" -ForegroundColor Green
+        return $true
+    } else {
+        Write-Host "[ERROR] IIS no quedó instalado" -ForegroundColor Red
         return $false
     }
-
-    Write-Host "[OK] IIS instalado correctamente" -ForegroundColor Green
-    return $true
 }
 
 # ================================
-# CREAR SITIO IIS
+# IIS
 # ================================
 function Levantar-IIS {
     param($Puerto)
 
-    if (!(Instalar-IIS-FTP)) { return }
+    if (!(Instalar-IIS)) { return }
 
     Import-Module WebAdministration
 
-    $webRoot = "C:\inetpub\wwwroot"
-    if (!(Test-Path $webRoot)) {
-        New-Item $webRoot -ItemType Directory -Force | Out-Null
+    $root = "C:\inetpub\wwwroot"
+    if (!(Test-Path $root)) {
+        New-Item $root -ItemType Directory | Out-Null
     }
 
-    Set-Content "$webRoot\index.html" "<h1>IIS activo en puerto $Puerto</h1>"
+    Set-Content "$root\index.html" "<h1>IIS puerto $Puerto</h1>"
 
+    Stop-Service W3SVC -Force -ErrorAction SilentlyContinue
     Remove-Website "Default Web Site" -ErrorAction SilentlyContinue
 
-    New-Website -Name "Default Web Site" `
-        -Port $Puerto `
-        -PhysicalPath $webRoot -Force | Out-Null
+    New-Website -Name "Default Web Site" -Port $Puerto -PhysicalPath $root -Force | Out-Null
 
     Start-Service W3SVC
 
-    Write-Host "[OK] IIS corriendo en puerto $Puerto" -ForegroundColor Green
+    if (Get-NetTCPConnection -LocalPort $Puerto -State Listen -ErrorAction SilentlyContinue) {
+        Write-Host "[OK] IIS corriendo en puerto $Puerto" -ForegroundColor Green
+    } else {
+        Write-Host "[ERROR] IIS no levantó" -ForegroundColor Red
+    }
 }
 
 # ================================
-# CONFIG FTP
+# FTP
 # ================================
 function Configurar-FTP {
 
-    if (!(Instalar-IIS-FTP)) { return }
+    if (!(Instalar-IIS)) { return }
 
     $appcmd = "$env:windir\system32\inetsrv\appcmd.exe"
 
@@ -91,22 +102,25 @@ function Configurar-FTP {
         /section:system.ftpServer/security/authentication/basicAuthentication `
         /enabled:true /commit:apphost
 
-    Start-Service ftpsvc
+    Start-Service ftpsvc -ErrorAction SilentlyContinue
     & $appcmd start site "ServidorFTP"
 
-    Write-Host "[OK] FTP activo en puerto 21" -ForegroundColor Green
+    if (Get-NetTCPConnection -LocalPort 21 -State Listen -ErrorAction SilentlyContinue) {
+        Write-Host "[OK] FTP activo" -ForegroundColor Green
+    } else {
+        Write-Host "[ERROR] FTP no levantó" -ForegroundColor Red
+    }
 }
 
 # ================================
-# NGINX SIMPLE
+# NGINX
 # ================================
 function Levantar-Nginx {
     param($Puerto)
 
     $nginx = "C:\tools\nginx\nginx.exe"
-
     if (!(Test-Path $nginx)) {
-        Write-Host "[ERROR] nginx no encontrado" -ForegroundColor Red
+        Write-Host "[ERROR] nginx no existe" -ForegroundColor Red
         return
     }
 
@@ -126,38 +140,34 @@ http {
 "@
 
     Set-Content "C:\tools\nginx\conf\nginx.conf" $conf
-
-    Set-Content "C:\tools\nginx\html\index.html" "<h1>Nginx puerto $Puerto</h1>"
+    Set-Content "C:\tools\nginx\html\index.html" "<h1>Nginx $Puerto</h1>"
 
     Start-Process $nginx -WorkingDirectory "C:\tools\nginx"
 
-    Write-Host "[OK] Nginx en puerto $Puerto" -ForegroundColor Green
+    Write-Host "[OK] Nginx puerto $Puerto" -ForegroundColor Green
 }
 
 # ================================
-# APACHE SIMPLE
+# APACHE
 # ================================
 function Levantar-Apache {
     param($Puerto)
 
     $apache = "C:\Apache24\bin\httpd.exe"
-
     if (!(Test-Path $apache)) {
-        Write-Host "[ERROR] Apache no encontrado" -ForegroundColor Red
+        Write-Host "[ERROR] Apache no existe" -ForegroundColor Red
         return
     }
 
     Stop-Process -Name httpd -Force -ErrorAction SilentlyContinue
 
-    $conf = "C:\Apache24\conf\httpd.conf"
+    (Get-Content "C:\Apache24\conf\httpd.conf") -replace "Listen 80", "Listen $Puerto" | Set-Content "C:\Apache24\conf\httpd.conf"
 
-    (Get-Content $conf) -replace "Listen 80", "Listen $Puerto" | Set-Content $conf
-
-    Set-Content "C:\Apache24\htdocs\index.html" "<h1>Apache puerto $Puerto</h1>"
+    Set-Content "C:\Apache24\htdocs\index.html" "<h1>Apache $Puerto</h1>"
 
     Start-Process $apache
 
-    Write-Host "[OK] Apache en puerto $Puerto" -ForegroundColor Green
+    Write-Host "[OK] Apache puerto $Puerto" -ForegroundColor Green
 }
 
 # ================================
