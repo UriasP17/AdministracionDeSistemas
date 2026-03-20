@@ -1,9 +1,9 @@
 #Requires -RunAsAdministrator
 
 # ====================================================================
-# TRUCO PARA SSH: AUTO-RELANZAR EN 64-BITS
+# TRUCO PARA SSH: AUTO-RELANZAR EN 64-BITS (BLINDADO)
 # ====================================================================
-if ($env:PROCESSOR_ARCHITECTURE -eq 'x86') {
+if (-not [System.Environment]::Is64BitProcess) {
     Write-Host '[!] Consola de 32-bits detectada por SSH. Relanzando en 64-bits...' -ForegroundColor Yellow
     $ps64 = "$env:windir\sysnative\WindowsPowerShell\v1.0\powershell.exe"
     & $ps64 -ExecutionPolicy Bypass -File $PSCommandPath
@@ -18,9 +18,20 @@ $global:ADSI = $null
 
 function Inicializar-Sitio-FTP {
     Write-Host "`n=== INICIALIZANDO AISLAMIENTO FTP ===" -ForegroundColor Cyan
-    Write-Host '> Instalando caracteristicas FTP...' -ForegroundColor Yellow
-    Install-WindowsFeature Web-FTP-Server -IncludeManagementTools | Out-Null
+    Write-Host '> Instalando binarios de IIS y FTP usando DISM (Bypass SSH)...' -ForegroundColor Yellow
     
+    # Usamos DISM porque por SSH el Install-WindowsFeature siempre tira el error 0x800f081f
+    dism.exe /Online /Enable-Feature /FeatureName:IIS-WebServerRole /All /NoRestart /quiet | Out-Null
+    dism.exe /Online /Enable-Feature /FeatureName:IIS-FTPServer /All /NoRestart /quiet | Out-Null
+    dism.exe /Online /Enable-Feature /FeatureName:IIS-FTPSvc /All /NoRestart /quiet | Out-Null
+    dism.exe /Online /Enable-Feature /FeatureName:IIS-WebServerManagementTools /All /NoRestart /quiet | Out-Null
+    dism.exe /Online /Enable-Feature /FeatureName:IIS-ManagementScriptingTools /All /NoRestart /quiet | Out-Null
+    
+    Write-Host '> Levantando servicio FTP...' -ForegroundColor Yellow
+    Start-Sleep -Seconds 4
+    Start-Service FTPSVC -ErrorAction SilentlyContinue
+
+    # Ahora si, importamos el modulo sin que explote
     Import-Module WebAdministration
 
     if (-not (Get-Website -Name 'FTP' -ErrorAction SilentlyContinue)) {
@@ -35,6 +46,7 @@ function Inicializar-Sitio-FTP {
 
     $global:ADSI = [ADSI]"WinNT://$env:COMPUTERNAME"
     Restart-WebItem 'IIS:\Sites\FTP' -ErrorAction SilentlyContinue
+    
     Write-Host "[+] Aislamiento 'IsolateAllDirectories' y configuracion SSL inicial aplicados." -ForegroundColor Green
     $null = Read-Host 'Presiona ENTER para continuar'
 }
@@ -47,7 +59,7 @@ function Registrar-Grupo-FTP {
     Write-Host '2) Entorno Boveda (Descarga automatica de instaladores)'
     Write-Host '3) Ambos'
     
-    $opcion = Read-Host 'Elija opcion 1, 2 o 3'
+    $opcion = Read-Host 'Elija una opcion (1, 2 o 3)'
 
     if (-not $global:ADSI) { $global:ADSI = [ADSI]"WinNT://$env:COMPUTERNAME" }
 
