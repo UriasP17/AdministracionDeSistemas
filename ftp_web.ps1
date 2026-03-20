@@ -8,6 +8,12 @@ $FZ_INSTALLER = "$env:TEMP\FileZilla_Server_Installer.exe"
 $FTP_ROOT     = "C:\FTP_FZ"
 $XML_CONFIG   = "C:\ProgramData\filezilla-server\settings.xml"
 
+# ====================================================================
+# ESTO ES LO QUE ARREGLA EL ERROR DE GITHUB ("LA CONEXIÓN HA TERMINADO")
+# Forzamos toda la sesión de PowerShell a usar protocolos seguros.
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
+# ====================================================================
+
 function Preparar-Carpetas {
     Write-Host "`n[*] Creando estructura de carpetas..." -ForegroundColor Cyan
     $carpetas = @(
@@ -24,7 +30,6 @@ function Preparar-Carpetas {
 
 function Bajar-Instaladores {
     Write-Host "`n[*] Descargando instaladores para la Boveda..." -ForegroundColor Cyan
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     
     $rutaNginx = "$FTP_ROOT\Boveda\http\Windows\Nginx"
     if (-not (Test-Path "$rutaNginx\nginx.zip")) {
@@ -47,16 +52,20 @@ function Instalar-FileZilla {
         return
     }
 
-    Write-Host "  ~ Descargando instalador limpio..." -ForegroundColor Yellow
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Write-Host "  ~ Descargando instalador limpio desde GitHub..." -ForegroundColor Yellow
     
-    # Mirror seguro y directo (sin bloqueos de Cloudflare)
+    # Mirror seguro de GitHub
     $url_espejo = "https://github.com/jmwebservices/httpd-2.4.63-win64-VS17/releases/download/v1.0/FileZilla_Server_1.8.2_win64-setup.exe"
     
-    Invoke-WebRequest -Uri $url_espejo -OutFile $FZ_INSTALLER -UseBasicParsing
+    try {
+        Invoke-WebRequest -Uri $url_espejo -OutFile $FZ_INSTALLER -UseBasicParsing
+    } catch {
+        Write-Host "  - ERROR AL DESCARGAR: $($_.Exception.Message)" -ForegroundColor Red
+        return
+    }
     
     if (-not (Test-Path $FZ_INSTALLER) -or (Get-Item $FZ_INSTALLER).Length -lt 2MB) {
-        Write-Host "  - ERROR: El instalador esta corrupto o no se descargo bien." -ForegroundColor Red
+        Write-Host "  - ERROR: El instalador esta corrupto o vacio." -ForegroundColor Red
         return
     }
 
