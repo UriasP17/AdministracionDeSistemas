@@ -1,172 +1,168 @@
+```powershell
+# ================================
+# CONFIG GLOBAL
+# ================================
+$SOURCE = "wim:D:\sources\install.wim:2"
 Import-Module WebAdministration -ErrorAction SilentlyContinue
 
-# =========================
-# FIX GLOBAL DISM
-# =========================
-$WIM_PATH = "wim:D:\sources\install.wim:2"
+# ================================
+# INSTALAR IIS + FTP (FIX REAL)
+# ================================
+function Instalar-IIS-FTP {
 
-function Instalar-FeatureSeguro {
-    param($nombre)
+    Write-Host "[*] Instalando IIS + FTP..." -ForegroundColor Cyan
 
-    $feature = Get-WindowsFeature -Name $nombre -ErrorAction SilentlyContinue
+    $features = @(
+        "IIS-WebServerRole",
+        "IIS-WebServer",
+        "IIS-ManagementConsole",
+        "IIS-FTPSvc"
+    )
 
-    if ($feature -and $feature.InstallState -ne "Installed") {
-        Install-WindowsFeature `
-            -Name $nombre `
-            -IncludeManagementTools `
-            -Source $WIM_PATH `
-            -LimitAccess `
-            -ErrorAction SilentlyContinue | Out-Null
+    foreach ($f in $features) {
+        dism /online /enable-feature /featurename:$f /all /source:$SOURCE /limitaccess | Out-Null
     }
+
+    Start-Sleep -Seconds 5
+
+    $svc = Get-Service W3SVC -ErrorAction SilentlyContinue
+    if (!$svc) {
+        Write-Host "[ERROR] IIS no se instaló" -ForegroundColor Red
+        return $false
+    }
+
+    Write-Host "[OK] IIS instalado correctamente" -ForegroundColor Green
+    return $true
 }
 
-# =========================
-# PUERTOS BLOQUEADOS
-# =========================
-$PUERTOS_BLOQUEADOS = @(1,7,9,11,13,15,17,19,20,21,22,23,25,37,42,43,53,69,77,79,
-    87,95,101,102,103,104,109,110,111,113,115,117,119,123,135,139,142,143,179,389,
-    465,512,513,514,515,526,530,531,532,540,548,554,556,563,587,601,636,993,995,
-    2049,3659,4045,6000,6665,6666,6667,6668,6669,6697)
-
-# =========================
-# LIMPIAR
-# =========================
-function Limpiar-Entorno {
+# ================================
+# CREAR SITIO IIS
+# ================================
+function Levantar-IIS {
     param($Puerto)
-    Stop-Service nginx, Apache, Apache2.4, W3SVC, ftpsvc -Force -ErrorAction SilentlyContinue
-    taskkill /F /IM nginx.exe /T 2>$null
-    taskkill /F /IM httpd.exe /T 2>$null
-    $con = Get-NetTCPConnection -LocalPort $Puerto -State Listen -ErrorAction SilentlyContinue
-    if ($con) { $con.OwningProcess | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue } }
-    Start-Sleep 2
+
+    if (!(Instalar-IIS-FTP)) { return }
+
+    Import-Module WebAdministration
+
+    $webRoot = "C:\inetpub\wwwroot"
+    if (!(Test-Path $webRoot)) {
+        New-Item $webRoot -ItemType Directory -Force | Out-Null
+    }
+
+    Set-Content "$webRoot\index.html" "<h1>IIS activo en puerto $Puerto</h1>"
+
+    Remove-Website "Default Web Site" -ErrorAction SilentlyContinue
+
+    New-Website -Name "Default Web Site" `
+        -Port $Puerto `
+        -PhysicalPath $webRoot -Force | Out-Null
+
+    Start-Service W3SVC
+
+    Write-Host "[OK] IIS corriendo en puerto $Puerto" -ForegroundColor Green
 }
 
-# =========================
-# PAGINA
-# =========================
-function Crear-Pagina {
-    param($servicio, $puerto)
+# ================================
+# CONFIG FTP
+# ================================
+function Configurar-FTP {
 
-    $path = switch ($servicio) {
-        "nginx"  { "C:\tools\nginx-1.29.6\html\index.html" }
-        "apache" { "C:\Apache24\htdocs\index.html" }
-        "iis"    { "C:\inetpub\wwwroot\index.html" }
-    }
-
-    $dir = Split-Path $path
-    if (!(Test-Path $dir)) { New-Item $dir -ItemType Directory -Force | Out-Null }
-
-    "<h1>$servicio activo en $puerto</h1>" | Set-Content $path
-}
-
-# =========================
-# CERT SSL
-# =========================
-function Obtener-CertObj {
-    $cert = Get-ChildItem Cert:\LocalMachine\My | Where-Object { $_.Subject -like "*reprobados*" } | Select-Object -First 1
-    if (!$cert) {
-        $cert = New-SelfSignedCertificate -DnsName "www.reprobados.com" `
-            -CertStoreLocation "Cert:\LocalMachine\My" `
-            -NotAfter (Get-Date).AddDays(365)
-    }
-    return $cert
-}
-
-# =========================
-# DESPLIEGUE
-# =========================
-function Aplicar-Despliegue {
-    param($Servicio)
-
-    if (-not ($global:PUERTO_ACTUAL -match '^\d+$')) {
-        $global:PUERTO_ACTUAL = Read-Host "Puerto"
-    }
-
-    $P = [int]$global:PUERTO_ACTUAL
-
-    Limpiar-Entorno $P
-
-    switch ($Servicio) {
-
-        "iis" {
-
-            Instalar-FeatureSeguro "Web-Server"
-            Instalar-FeatureSeguro "Web-Http-Redirect"
-
-            $cert = Obtener-CertObj
-            $root = "C:\inetpub\wwwroot"
-
-            if (!(Test-Path $root)) { New-Item $root -ItemType Directory | Out-Null }
-
-            Crear-Pagina "iis" $P
-
-            Remove-Website "Default Web Site" -ErrorAction SilentlyContinue
-            New-Website -Name "Default Web Site" -Port $P -PhysicalPath $root -Force | Out-Null
-
-            New-WebBinding -Name "Default Web Site" -Protocol "https" -Port $P
-            Get-Item "Cert:\LocalMachine\My\$($cert.Thumbprint)" |
-                New-Item "IIS:\SslBindings\*!$P" -Force | Out-Null
-
-            Start-Service W3SVC
-        }
-
-        "nginx" {
-            Crear-Pagina "nginx" $P
-        }
-
-        "apache" {
-            Crear-Pagina "apache" $P
-        }
-    }
-
-    if (Get-NetTCPConnection -LocalPort $P -State Listen -ErrorAction SilentlyContinue) {
-        Write-Host "[OK] $Servicio en puerto $P" -ForegroundColor Green
-    } else {
-        Write-Host "[ERROR] No levantó" -ForegroundColor Red
-    }
-}
-
-# =========================
-# FTP SEGURO
-# =========================
-function Configurar-FTP-Seguro {
-
-    Instalar-FeatureSeguro "Web-Ftp-Server"
-    Instalar-FeatureSeguro "Web-Ftp-Service"
-    Instalar-FeatureSeguro "Web-Mgmt-Console"
+    if (!(Instalar-IIS-FTP)) { return }
 
     $appcmd = "$env:windir\system32\inetsrv\appcmd.exe"
 
-    if (!(Test-Path "C:\FTP_Publico")) {
-        New-Item "C:\FTP_Publico" -ItemType Directory | Out-Null
+    if (!(Test-Path "C:\FTP")) {
+        New-Item "C:\FTP" -ItemType Directory | Out-Null
     }
 
-    & $appcmd add site /name:"ServidorFTP" /bindings:"ftp/*:21:" /physicalPath:"C:\FTP_Publico" 2>$null
+    & $appcmd delete site "ServidorFTP" 2>$null
 
-    $cert = Obtener-CertObj
+    & $appcmd add site `
+        /name:"ServidorFTP" `
+        /bindings:"ftp/*:21:" `
+        /physicalPath:"C:\FTP" | Out-Null
 
-    & $appcmd set site "ServidorFTP" "-ftpServer.security.ssl.controlChannelPolicy:SslAllow"
-    & $appcmd set site "ServidorFTP" "-ftpServer.security.ssl.serverCertHash:$($cert.Thumbprint)"
+    & $appcmd set config "ServidorFTP" `
+        /section:system.ftpServer/security/authentication/anonymousAuthentication `
+        /enabled:true /commit:apphost
+
+    & $appcmd set config "ServidorFTP" `
+        /section:system.ftpServer/security/authentication/basicAuthentication `
+        /enabled:true /commit:apphost
 
     Start-Service ftpsvc
+    & $appcmd start site "ServidorFTP"
 
-    if (Get-NetTCPConnection -LocalPort 21 -State Listen -ErrorAction SilentlyContinue) {
-        Write-Host "[OK] FTP activo" -ForegroundColor Green
-    } else {
-        Write-Host "[ERROR] FTP no levantó" -ForegroundColor Red
+    Write-Host "[OK] FTP activo en puerto 21" -ForegroundColor Green
+}
+
+# ================================
+# NGINX SIMPLE
+# ================================
+function Levantar-Nginx {
+    param($Puerto)
+
+    $nginx = "C:\tools\nginx\nginx.exe"
+
+    if (!(Test-Path $nginx)) {
+        Write-Host "[ERROR] nginx no encontrado" -ForegroundColor Red
+        return
+    }
+
+    Stop-Process -Name nginx -Force -ErrorAction SilentlyContinue
+
+    $conf = @"
+events {}
+http {
+    server {
+        listen $Puerto;
+        location / {
+            root html;
+            index index.html;
+        }
     }
 }
+"@
 
-# =========================
-# PUERTO
-# =========================
-function Validar-Puerto {
-    $global:PUERTO_ACTUAL = Read-Host "Puerto"
+    Set-Content "C:\tools\nginx\conf\nginx.conf" $conf
+
+    Set-Content "C:\tools\nginx\html\index.html" "<h1>Nginx puerto $Puerto</h1>"
+
+    Start-Process $nginx -WorkingDirectory "C:\tools\nginx"
+
+    Write-Host "[OK] Nginx en puerto $Puerto" -ForegroundColor Green
 }
 
-# =========================
+# ================================
+# APACHE SIMPLE
+# ================================
+function Levantar-Apache {
+    param($Puerto)
+
+    $apache = "C:\Apache24\bin\httpd.exe"
+
+    if (!(Test-Path $apache)) {
+        Write-Host "[ERROR] Apache no encontrado" -ForegroundColor Red
+        return
+    }
+
+    Stop-Process -Name httpd -Force -ErrorAction SilentlyContinue
+
+    $conf = "C:\Apache24\conf\httpd.conf"
+
+    (Get-Content $conf) -replace "Listen 80", "Listen $Puerto" | Set-Content $conf
+
+    Set-Content "C:\Apache24\htdocs\index.html" "<h1>Apache puerto $Puerto</h1>"
+
+    Start-Process $apache
+
+    Write-Host "[OK] Apache en puerto $Puerto" -ForegroundColor Green
+}
+
+# ================================
 # MENU
-# =========================
+# ================================
 function Menu {
 
     while ($true) {
@@ -182,14 +178,34 @@ function Menu {
         $op = Read-Host "Opcion"
 
         switch ($op) {
-            "1" { Aplicar-Despliegue "iis" }
-            "2" { Aplicar-Despliegue "nginx" }
-            "3" { Aplicar-Despliegue "apache" }
-            "4" { Configurar-FTP-Seguro }
-            "5" { Validar-Puerto }
-            "0" { break }
+
+            "1" {
+                $p = Read-Host "Puerto"
+                Levantar-IIS $p
+            }
+
+            "2" {
+                $p = Read-Host "Puerto"
+                Levantar-Nginx $p
+            }
+
+            "3" {
+                $p = Read-Host "Puerto"
+                Levantar-Apache $p
+            }
+
+            "4" {
+                Configurar-FTP
+            }
+
+            "5" {
+                $global:PUERTO = Read-Host "Nuevo puerto"
+            }
+
+            "0" { exit }
         }
     }
 }
 
 Menu
+```
