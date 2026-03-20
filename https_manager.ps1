@@ -280,8 +280,20 @@ function Generar-SSL {
 # =============================================================
 function Instalar-IIS-Web {
     param($Archivo, $WebFTP, $SSL)
-    Install-WindowsFeature Web-Server -IncludeManagementTools | Out-Null
-    Import-Module WebAdministration -ErrorAction SilentlyContinue
+    Write-Host "`n[*] Instalando/Configurando IIS..." -ForegroundColor Cyan
+    
+    # Manejo de error para la instalación fallida de Windows
+    try {
+        Install-WindowsFeature Web-Server -IncludeManagementTools -ErrorAction Stop | Out-Null
+    } catch {
+        Write-Host "  [!] Advertencia: Los archivos de IIS de Windows estan dañados (Error 0x800f081f)." -ForegroundColor Yellow
+        Write-Host "      Se preparará la estructura web como simulación." -ForegroundColor Yellow
+    }
+
+    # Cargar módulo solo si existe
+    if (Get-Module -ListAvailable -Name WebAdministration) {
+        Import-Module WebAdministration -ErrorAction SilentlyContinue
+    }
     
     $pHttp = Read-Host "Puerto HTTP [Enter=80]"; if (!$pHttp) { $pHttp = 80 }
     $pHttps = 443
@@ -291,17 +303,24 @@ function Instalar-IIS-Web {
     New-Item -ItemType Directory -Force -Path $sitePath | Out-Null
     Set-Content "$sitePath\index.html" "<h1>IIS WEB FUNCIONANDO (Practica 7)</h1>" -Force
 
-    if ($SSL -eq "S") {
-        $cert = New-SelfSignedCertificate -DnsName "www.reprobados.com" -CertStoreLocation "cert:\LocalMachine\My" -NotAfter (Get-Date).AddDays(365)
-        New-Website -Name "SitioIIS_P7" -Port $pHttp -PhysicalPath $sitePath -Force | Out-Null
-        New-WebBinding -Name "SitioIIS_P7" -Protocol "https" -Port $pHttps -IPAddress "*"
-        $script:RESUMEN_INSTALACIONES += "IIS Web | SSL: SI | Puertos: $pHttp / $pHttps"
+    # Intentar configurar el sitio solo si los comandos de IIS están disponibles
+    if (Get-Command New-Website -ErrorAction SilentlyContinue) {
+        if ($SSL -eq "S") {
+            $cert = New-SelfSignedCertificate -DnsName "www.reprobados.com" -CertStoreLocation "cert:\LocalMachine\My" -NotAfter (Get-Date).AddDays(365)
+            New-Website -Name "SitioIIS_P7" -Port $pHttp -PhysicalPath $sitePath -Force | Out-Null
+            New-WebBinding -Name "SitioIIS_P7" -Protocol "https" -Port $pHttps -IPAddress "*"
+            $script:RESUMEN_INSTALACIONES += "IIS Web | SSL: SI | Puertos: $pHttp / $pHttps"
+        } else {
+            New-Website -Name "SitioIIS_P7" -Port $pHttp -PhysicalPath $sitePath -Force | Out-Null
+            $script:RESUMEN_INSTALACIONES += "IIS Web | SSL: NO | Puerto: $pHttp"
+        }
+        $script:SERVICIOS_VERIFICAR += "IIS|W3SVC|$pHttp|http"
+        Write-Host "  + IIS Configurado y montado correctamente." -ForegroundColor Green
     } else {
-        New-Website -Name "SitioIIS_P7" -Port $pHttp -PhysicalPath $sitePath -Force | Out-Null
-        $script:RESUMEN_INSTALACIONES += "IIS Web | SSL: NO | Puerto: $pHttp"
+        Write-Host "  [!] Los comandos de IIS no estan disponibles. Estructura de carpetas creada." -ForegroundColor Yellow
+        if ($SSL -eq "S") { $script:RESUMEN_INSTALACIONES += "IIS Web (Simulado) | SSL: SI | Puertos: $pHttp / $pHttps" }
+        else { $script:RESUMEN_INSTALACIONES += "IIS Web (Simulado) | SSL: NO | Puerto: $pHttp" }
     }
-    $script:SERVICIOS_VERIFICAR += "IIS|W3SVC|$pHttp|http"
-    Write-Host "  + IIS Configurado correctamente." -ForegroundColor Green
 }
 
 function Instalar-Apache {
