@@ -1,4 +1,3 @@
-
 Import-Module WebAdministration -ErrorAction SilentlyContinue
 
 $PUERTOS_BLOQUEADOS = @(1,7,9,11,13,15,17,19,20,21,22,23,25,37,42,43,53,69,77,79,
@@ -717,3 +716,10 @@ function Menu-FTP-HTTP {
         }
     }
 }
+
+# ================================================================
+# INICIO DEL SCRIPT
+# ================================================================
+
+# Llamar a la función principal para que arranque el menú
+Menu-FTP-HTTP
