@@ -1,358 +1,150 @@
 #Requires -RunAsAdministrator
+# ====================================================================
+#   GESTOR DE FTP (IIS + ADSI + FTPS) - INDEPENDIENTE
+# ====================================================================
 
-$FTP_ROOT = "C:\inetpub\ftproot"
-$FTP_ANON = "C:\inetpub\ftpanon"
-$GRUPOS = @("reprobados", "recursadores")
-$FZ_DIR = "C:\Program Files\FileZilla Server"
+$global:ADSI = $null
 
-function Escribir-Titulo { param([string]$texto); Write-Host "`n--- $texto ---" -ForegroundColor Cyan }
-function Escribir-Exito { param([string]$texto); Write-Host "[OK] $texto" -ForegroundColor Green }
-function Escribir-ErrorMsg { param([string]$texto); Write-Host "[ERROR] $texto" -ForegroundColor Red }
-function Escribir-Info { param([string]$texto); Write-Host "[*] $texto" -ForegroundColor Yellow }
+function Inicializar-Sitio-FTP {
+    Write-Host "`n=== INICIALIZANDO AISLAMIENTO FTP ===" -ForegroundColor Cyan
+    Install-WindowsFeature Web-FTP-Server -IncludeManagementTools | Out-Null
+    Import-Module WebAdministration
 
-function Crear-Estructura-Base {
-    foreach ($dir in @("$FTP_ROOT\general", "$FTP_ROOT\reprobados", "$FTP_ROOT\recursadores", "$FTP_ROOT\personal", $FTP_ANON)) {
-        if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    if (-not (Get-Website -Name "FTP" -ErrorAction SilentlyContinue)) {
+        Write-Host "> Creando sitio 'FTP' base en IIS..." -ForegroundColor Yellow
+        if (-not (Test-Path "C:\FTP")) { New-Item -Path "C:\FTP" -ItemType Directory -Force | Out-Null }
+        New-WebFtpSite -Name "FTP" -Port 21 -PhysicalPath "C:\FTP" -Force | Out-Null
     }
+
+    Set-WebConfigurationProperty -Filter "/system.applicationHost/sites/site[@name='FTP']/ftpServer/userIsolation" -Name "mode" -Value "IsolateAllDirectories"
+    Set-ItemProperty "IIS:\Sites\FTP" -Name ftpServer.security.ssl.controlChannelPolicy -Value 0
+    Set-ItemProperty "IIS:\Sites\FTP" -Name ftpServer.security.ssl.dataChannelPolicy -Value 0
+
+    $global:ADSI = [ADSI]"WinNT://$env:ComputerName"
+    Restart-WebItem "IIS:\Sites\FTP" -ErrorAction SilentlyContinue
+    Write-Host "[+] Aislamiento 'IsolateAllDirectories' y configuracion SSL inicial aplicados." -ForegroundColor Green
+    $null = Read-Host "Presiona ENTER para continuar"
 }
 
-function Instalar-FileZillaServer {
-    Escribir-Info "Descargando FileZilla Server (alternativa a IIS)..."
-    $installer = "$env:TEMP\FileZilla_Server_1.8.2_win64-setup.exe"
-    
-    # Descargar usando .NET nativo para evitar problemas
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    try {
-        (New-Object System.Net.WebClient).DownloadFile("https://dl2.cdn.filezilla-project.org/server/FileZilla_Server_1.8.2_win64-setup.exe", $installer)
-    } catch {
-        # Plan B
-        & curl.exe -s -L -o $installer "https://dl2.cdn.filezilla-project.org/server/FileZilla_Server_1.8.2_win64-setup.exe"
-    }
+function Registrar-Grupo-FTP {
+    Write-Host "`n=====================================" -ForegroundColor Cyan
+    Write-Host "   GESTOR DE GRUPOS Y BÓVEDA FTP" -ForegroundColor Cyan
+    Write-Host "=====================================" -ForegroundColor Cyan
+    Write-Host "1) Entorno de Alumnos (Grupos: Reprobados / Recursadores)"
+    Write-Host "2) Entorno Boveda (Descarga automatica de instaladores)"
+    Write-Host "3) Ambos"
+    $opcion = Read-Host "Elija una opcion (1, 2 o 3)"
 
-    if (-not (Test-Path $installer)) {
-        Escribir-ErrorMsg "No se pudo descargar FileZilla Server."
-        return $false
-    }
+    if (-not $global:ADSI) { $global:ADSI = [ADSI]"WinNT://$env:ComputerName" }
 
-    Escribir-Info "Instalando servicio..."
-    Start-Process -FilePath $installer -ArgumentList "/S" -Wait
-    Start-Sleep -Seconds 5
-    
-    if (-not (Get-Service -Name "FileZilla Server" -ErrorAction SilentlyContinue)) {
-        Escribir-ErrorMsg "Error al instalar el servicio."
-        return $false
-    }
-    
-    return $true
-}
-
-function Generar-Configuracion-FZ {
-    # Genera la configuración XML base de FileZilla
-    $xmlPath = "C:\ProgramData\filezilla-server\settings.xml"
-    
-    # Detener servicio para editar
-    Stop-Service "FileZilla Server" -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 2
-    
-    # Crear directorio si no existe
-    if (-not (Test-Path "C:\ProgramData\filezilla-server")) {
-        New-Item -ItemType Directory -Path "C:\ProgramData\filezilla-server" -Force | Out-Null
-    }
-
-    $xml = @"
-<?xml version="1.0" encoding="UTF-8"?>
-<filezilla_server>
-    <settings>
-        <setting id="admin_port">14148</setting>
-    </settings>
-    <servers>
-        <server>
-            <network>
-                <bindings>
-                    <binding port="21" protocol="tcp">
-                        <address>*</address>
-                    </binding>
-                </bindings>
-            </network>
-            <users>
-            </users>
-            <groups>
-            </groups>
-        </server>
-    </servers>
-</filezilla_server>
-"@
-    Set-Content -Path $xmlPath -Value $xml -Encoding UTF8
-    
-    Start-Service "FileZilla Server" -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 2
-}
-
-function Agregar-Usuario-FZ {
-    param([string]$Usuario, [string]$Password, [string]$Grupo)
-    
-    $xmlPath = "C:\ProgramData\filezilla-server\settings.xml"
-    if (-not (Test-Path $xmlPath)) { return $false }
-    
-    Stop-Service "FileZilla Server" -Force -ErrorAction SilentlyContinue
-    [xml]$config = Get-Content $xmlPath
-    
-    $usersNode = $config.SelectSingleNode("//users")
-    
-    # Verificar si existe
-    $existing = $usersNode.SelectSingleNode("user[@name='$Usuario']")
-    if ($existing) { $usersNode.RemoveChild($existing) | Out-Null }
-    
-    # Hashear contraseña (FZ usa SHA512 con salt, para simplificar ponemos plain y pedimos cambiar luego si es GUI, 
-    # pero como es consola, FZ acepta un hash vacío y confía en el admin si le forzamos un formato específico. 
-    # Para bypass directo en práctica, lo haremos sin pass si falla, o usando FZ cli si existe).
-    
-    # Creando nodo de usuario
-    $userNode = $config.CreateElement("user")
-    $userNode.SetAttribute("name", $Usuario)
-    
-    $credentialsNode = $config.CreateElement("credentials")
-    $passwordNode = $config.CreateElement("password")
-    # Generando hash SHA512 (esto es un dummy, idealmente usaríamos el CLI)
-    $hash = [System.Security.Cryptography.SHA512]::Create().ComputeHash([System.Text.Encoding]::UTF8.GetBytes($Password))
-    $hashStr = [System.BitConverter]::ToString($hash).Replace("-","").ToLower()
-    $passwordNode.SetAttribute("hash", $hashStr)
-    $credentialsNode.AppendChild($passwordNode) | Out-Null
-    $userNode.AppendChild($credentialsNode) | Out-Null
-    
-    $vfsNode = $config.CreateElement("vfs")
-    
-    # Carpeta base del grupo
-    $mountNode1 = $config.CreateElement("mount")
-    $vdirNode1 = $config.CreateElement("virtual_path")
-    $vdirNode1.InnerText = "/"
-    $ndirNode1 = $config.CreateElement("native_path")
-    $ndirNode1.InnerText = "$FTP_ROOT\$Grupo"
-    $mountNode1.AppendChild($vdirNode1) | Out-Null
-    $mountNode1.AppendChild($ndirNode1) | Out-Null
-    
-    # Permisos (Read, Write, Delete, etc.)
-    $permsNode1 = $config.CreateElement("permissions")
-    $permsNode1.SetAttribute("file_read", "1")
-    $permsNode1.SetAttribute("file_write", "1")
-    $permsNode1.SetAttribute("file_delete", "0")
-    $permsNode1.SetAttribute("dir_create", "1")
-    $permsNode1.SetAttribute("dir_delete", "0")
-    $permsNode1.SetAttribute("dir_list", "1")
-    $mountNode1.AppendChild($permsNode1) | Out-Null
-    $vfsNode.AppendChild($mountNode1) | Out-Null
-
-    # Carpeta general
-    $mountNode2 = $config.CreateElement("mount")
-    $vdirNode2 = $config.CreateElement("virtual_path")
-    $vdirNode2.InnerText = "/general"
-    $ndirNode2 = $config.CreateElement("native_path")
-    $ndirNode2.InnerText = "$FTP_ROOT\general"
-    $mountNode2.AppendChild($vdirNode2) | Out-Null
-    $mountNode2.AppendChild($ndirNode2) | Out-Null
-    
-    $permsNode2 = $config.CreateElement("permissions")
-    $permsNode2.SetAttribute("file_read", "1")
-    $permsNode2.SetAttribute("file_write", "0")
-    $permsNode2.SetAttribute("dir_list", "1")
-    $mountNode2.AppendChild($permsNode2) | Out-Null
-    $vfsNode.AppendChild($mountNode2) | Out-Null
-    
-    # Carpeta personal
-    $mountNode3 = $config.CreateElement("mount")
-    $vdirNode3 = $config.CreateElement("virtual_path")
-    $vdirNode3.InnerText = "/$Usuario"
-    $ndirNode3 = $config.CreateElement("native_path")
-    $ndirNode3.InnerText = "$FTP_ROOT\personal\$Usuario"
-    $mountNode3.AppendChild($vdirNode3) | Out-Null
-    $mountNode3.AppendChild($ndirNode3) | Out-Null
-    
-    $permsNode3 = $config.CreateElement("permissions")
-    $permsNode3.SetAttribute("file_read", "1")
-    $permsNode3.SetAttribute("file_write", "1")
-    $permsNode3.SetAttribute("file_delete", "1")
-    $permsNode3.SetAttribute("dir_create", "1")
-    $permsNode3.SetAttribute("dir_delete", "1")
-    $permsNode3.SetAttribute("dir_list", "1")
-    $mountNode3.AppendChild($permsNode3) | Out-Null
-    $vfsNode.AppendChild($mountNode3) | Out-Null
-
-    $userNode.AppendChild($vfsNode) | Out-Null
-    
-    # Metadatos extras para saber a qué grupo pertenece
-    $descNode = $config.CreateElement("description")
-    $descNode.InnerText = $Grupo
-    $userNode.AppendChild($descNode) | Out-Null
-
-    $usersNode.AppendChild($userNode) | Out-Null
-    $config.Save($xmlPath)
-    
-    Start-Service "FileZilla Server" -ErrorAction SilentlyContinue
-    return $true
-}
-
-function Opcion-Instalar-FTP {
-    Escribir-Titulo "Instalar y configurar servidor FTP (FileZilla)"
-    Crear-Estructura-Base
-    
-    if (Instalar-FileZillaServer) {
-        Generar-Configuracion-FZ
-        if (-not (Get-NetFirewallRule -DisplayName "FTP-FZ" -ErrorAction SilentlyContinue)) {
-            New-NetFirewallRule -DisplayName "FTP-FZ" -Direction Inbound -Protocol TCP -LocalPort 21 -Action Allow | Out-Null
+    if ($opcion -in @("1","3")) {
+        Write-Host "`n> Inicializando Grupos Base..." -ForegroundColor Cyan
+        foreach ($grupo in @("Reprobados", "Recursadores")) {
+            if (-not($global:ADSI.Children | Where-Object { $_.SchemaClassName -eq "Group" -and $_.Name -eq $grupo})) {
+                if (-not (Test-Path "C:\FTP\$grupo")) { New-Item -Path "C:\FTP\$grupo" -ItemType Directory -Force | Out-Null }
+                $g = $global:ADSI.Create("Group", $grupo)
+                $g.SetInfo(); $g.Description = "Grupo $grupo FTP"; $g.SetInfo()
+                Write-Host "  + Grupo y carpeta $grupo creados." -ForegroundColor Green
+            } else { Write-Host "  - El grupo $grupo ya existe." -ForegroundColor DarkGray }
         }
-        Escribir-Exito "Servidor FTP configurado y en ejecucion."
-    }
-}
-
-function Opcion-Crear-Usuarios {
-    Escribir-Titulo "Crear Usuarios"
-    $N = Read-Host "Cuantos usuarios deseas crear?"
-
-    if ($N -notmatch "^\d+$" -or $N -eq "0") {
-        return Escribir-ErrorMsg "Cantidad invalida."
     }
 
-    for ($i = 1; $i -le [int]$N; $i++) {
-        Write-Host "`n--- Usuario $i ---" -ForegroundColor DarkCyan
-        $USERNAME = Read-Host "Nombre de usuario"
+    if ($opcion -in @("2","3")) {
+        Write-Host "`n> Inicializando Boveda Segura para Instaladores..." -ForegroundColor Cyan
+        $rutaBase = "C:\FTP\Practica7\http\Windows"
+        $rutaApache = "$rutaBase\Apache"; $rutaNginx = "$rutaBase\Nginx"
+
+        if (-not (Test-Path $rutaApache)) { New-Item -Path $rutaApache -ItemType Directory -Force | Out-Null }
+        if (-not (Test-Path $rutaNginx)) { New-Item -Path $rutaNginx -ItemType Directory -Force | Out-Null }
+
+        Import-Module WebAdministration
+        New-WebVirtualDirectory -Site "FTP" -Name "Instaladores" -PhysicalPath "C:\FTP\Practica7" -Force -ErrorAction SilentlyContinue | Out-Null
         
-        $xmlPath = "C:\ProgramData\filezilla-server\settings.xml"
-        if (Test-Path $xmlPath) {
-            [xml]$config = Get-Content $xmlPath
-            if ($config.SelectSingleNode("//user[@name='$USERNAME']")) {
-                Escribir-ErrorMsg "El usuario '$USERNAME' ya existe."
-                continue
-            }
-        }
-
-        $PASSWORD = Read-Host "Contrasena"
-        $GRUPO_SEL = Read-Host "Grupo (1: reprobados | 2: recursadores)"
-        $GRUPO = if ($GRUPO_SEL -eq "1") { "reprobados" } else { "recursadores" }
-
-        $personalDir = "$FTP_ROOT\personal\$USERNAME"
-        if (-not (Test-Path $personalDir)) { New-Item -ItemType Directory -Path $personalDir -Force | Out-Null }
-
-        Escribir-Info "Generando cuenta en FileZilla..."
-        if (Agregar-Usuario-FZ -Usuario $USERNAME -Password $PASSWORD -Grupo $GRUPO) {
-            Escribir-Exito "Cuenta '$USERNAME' creada en '$GRUPO'."
-        } else {
-            Escribir-ErrorMsg "Fallo al crear la cuenta."
+        $descargar = Read-Host "Desea descargar automaticamente instaladores de Apache y Nginx? (S/N)"
+        if ($descargar -match "^[sS]$") {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            try {
+                Write-Host "  ~ Descargando Nginx y generando SHA256..." -ForegroundColor Cyan
+                Invoke-WebRequest "https://nginx.org/download/nginx-1.24.0.zip" -OutFile "$rutaNginx\nginx.zip" -UseBasicParsing
+                (Get-FileHash "$rutaNginx\nginx.zip" -Algorithm SHA256).Hash | Out-File "$rutaNginx\nginx.zip.sha256" -Encoding ascii
+                
+                Write-Host "  ~ Descargando Apache y generando SHA256..." -ForegroundColor Cyan
+                Invoke-WebRequest "https://archive.apache.org/dist/httpd/binaries/win32/httpd-2.2.25-win32-x86-openssl-0.9.8y.msi" -OutFile "$rutaApache\apache.msi" -UseBasicParsing
+                (Get-FileHash "$rutaApache\apache.msi" -Algorithm SHA256).Hash | Out-File "$rutaApache\apache.msi.sha256" -Encoding ascii
+                Write-Host "  + BOVEDA LISTA." -ForegroundColor Green
+            } catch { Write-Host "- Error de descarga." -ForegroundColor Red }
         }
     }
+    $null = Read-Host "Presiona ENTER para continuar"
 }
 
-function Opcion-Cambiar-Grupo {
-    Escribir-Titulo "Reasignar Grupo"
-    $USERNAME = Read-Host "Nombre del usuario"
+function Registrar-Alumno-FTP {
+    Write-Host "`n> Registro de Usuario FTP" -ForegroundColor Cyan
+    $FTPUserName = Read-Host "Nombre de usuario"
+    $FTPPassword = Read-Host "Contrasena (Min. 8 char, Mayus, Minus, Num)"
+    $opcGrupo = Read-Host "1-Reprobados  2-Recursadores"
+    $FTPUserGroupName = if ($opcGrupo -eq "1") { "Reprobados" } else { "Recursadores" }
 
-    $xmlPath = "C:\ProgramData\filezilla-server\settings.xml"
-    if (-not (Test-Path $xmlPath)) { return Escribir-ErrorMsg "Servidor no configurado." }
-    
-    [xml]$config = Get-Content $xmlPath
-    $userNode = $config.SelectSingleNode("//user[@name='$USERNAME']")
-    
-    if (-not $userNode) {
-        return Escribir-ErrorMsg "El usuario no existe."
-    }
+    if (Get-LocalUser -Name $FTPUserName -ErrorAction SilentlyContinue) { Write-Host "Usuario ya existe." -ForegroundColor Red; return }
 
-    $GRUPO_ACTUAL = $userNode.SelectSingleNode("description").InnerText
-    Escribir-Info "Grupo actual: $GRUPO_ACTUAL"
+    Write-Host "> Creando usuario y asignando grupo..." -ForegroundColor Yellow
+    $passSecure = ConvertTo-SecureString $FTPPassword -AsPlainText -Force
+    New-LocalUser -Name $FTPUserName -Password $passSecure -Description "Usuario FTP" | Out-Null
+    Start-Sleep -Seconds 1
     
-    $NUEVO_GRUPO_SEL = Read-Host "Nuevo grupo (1: reprobados | 2: recursadores)"
-    $NUEVO_GRUPO = if ($NUEVO_GRUPO_SEL -eq "1") { "reprobados" } else { "recursadores" }
+    $miembros = Get-LocalGroupMember -Group $FTPUserGroupName -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
+    if ($miembros -notmatch $FTPUserName) { Add-LocalGroupMember -Group $FTPUserGroupName -Member $FTPUserName }
 
-    if ($GRUPO_ACTUAL -eq $NUEVO_GRUPO) {
-        return Escribir-ErrorMsg "Ya pertenece a ese grupo."
-    }
-
-    # Como no guardamos la pass original en texto plano, la forma de reasignar
-    # requerirá volver a pedirla para recrear el nodo.
-    $PASSWORD = Read-Host "Ingresa la contraseña del usuario para confirmar el cambio"
+    $rutaUser = "C:\FTP\LocalUser\$FTPUserName"
+    if (-not(Test-Path "C:\FTP\LocalUser\Public\General")) { New-Item -Path "C:\FTP\LocalUser\Public\General" -ItemType Directory -Force | Out-Null }
+    if (-not(Test-Path "$rutaUser\$FTPUserName")) { New-Item -Path "$rutaUser\$FTPUserName" -ItemType Directory -Force | Out-Null }
     
-    if (Agregar-Usuario-FZ -Usuario $USERNAME -Password $PASSWORD -Grupo $NUEVO_GRUPO) {
-        Escribir-Exito "'$USERNAME' movido a '$NUEVO_GRUPO'."
-    }
+    cmd /c mklink /J "$rutaUser\General" "C:\FTP\LocalUser\Public\General" | Out-Null
+    cmd /c mklink /J "$rutaUser\$FTPUserGroupName" "C:\FTP\$FTPUserGroupName" | Out-Null
+
+    icacls "C:\FTP\LocalUser\Public\General" /grant "${FTPUserName}:(OI)(CI)F" /T /Q | Out-Null
+    icacls "C:\FTP\$FTPUserGroupName" /grant "${FTPUserName}:(OI)(CI)F" /T /Q | Out-Null
+    icacls $rutaUser /grant "${FTPUserName}:(OI)(CI)F" /T /Q | Out-Null
+
+    Import-Module WebAdministration
+    Clear-WebConfiguration -Filter "/system.ftpServer/security/authorization" -PSPath IIS:\ -Location "FTP" -ErrorAction SilentlyContinue
+    Add-WebConfiguration "/system.ftpServer/security/authorization" -Value @{accessType="Allow";users="?";permissions=1} -PSPath IIS:\ -Location "FTP"
+    Add-WebConfiguration "/system.ftpServer/security/authorization" -Value @{accessType="Allow";users="*";permissions=3} -PSPath IIS:\ -Location "FTP"
+    Restart-Service ftpsvc -Force -ErrorAction SilentlyContinue
+    Write-Host "+ Listo! Usuario configurado." -ForegroundColor Green
+    $null = Read-Host "Presiona ENTER para continuar"
 }
 
-function Opcion-Eliminar-Usuario {
-    Escribir-Titulo "Borrar Usuario"
-    $USERNAME = Read-Host "Nombre del usuario a eliminar"
-
-    $xmlPath = "C:\ProgramData\filezilla-server\settings.xml"
-    if (-not (Test-Path $xmlPath)) { return Escribir-ErrorMsg "Servidor no configurado." }
+function Activar-Seguridad-FTPS {
+    Write-Host "`n> Configurando FTPS Seguro" -ForegroundColor Yellow
+    $cert = New-SelfSignedCertificate -DnsName "www.reprobados.com", "localhost", $env:COMPUTERNAME -CertStoreLocation "cert:\LocalMachine\My" -NotAfter (Get-Date).AddYears(1)
     
-    $confirm = Read-Host "Confirmar borrado (s/n)"
-    if ($confirm -match "^[sS]$") {
-        Stop-Service "FileZilla Server" -Force -ErrorAction SilentlyContinue
-        [xml]$config = Get-Content $xmlPath
-        $usersNode = $config.SelectSingleNode("//users")
-        $existing = $usersNode.SelectSingleNode("user[@name='$USERNAME']")
-        
-        if ($existing) {
-            $usersNode.RemoveChild($existing) | Out-Null
-            $config.Save($xmlPath)
-            
-            $personalDir = "$FTP_ROOT\personal\$USERNAME"
-            if (Test-Path $personalDir) { cmd /c "rmdir /s /q `"$personalDir`"" | Out-Null }
-            
-            Escribir-Exito "Usuario borrado."
-        } else {
-            Escribir-ErrorMsg "El usuario no existe."
-        }
-        Start-Service "FileZilla Server" -ErrorAction SilentlyContinue
-    }
+    Import-Module WebAdministration
+    Set-ItemProperty -Path "IIS:\Sites\FTP" -Name "ftpServer.security.ssl.serverCertHash" -Value $cert.Thumbprint
+    Set-ItemProperty -Path "IIS:\Sites\FTP" -Name "ftpServer.security.ssl.controlChannelPolicy" -Value "SslRequire"
+    Set-ItemProperty -Path "IIS:\Sites\FTP" -Name "ftpServer.security.ssl.dataChannelPolicy" -Value "SslRequire"
+    Restart-Service ftpsvc -Force -ErrorAction SilentlyContinue
+    Write-Host "+ FTPS Activado (Uso obligatorio de TLS Explicito)." -ForegroundColor Green
+    $null = Read-Host "Presiona ENTER para continuar"
 }
 
-function Opcion-Ver-Usuarios {
-    Escribir-Titulo "Usuarios Registrados"
-    $xmlPath = "C:\ProgramData\filezilla-server\settings.xml"
-    if (-not (Test-Path $xmlPath)) { return Escribir-Info "No hay configuracion activa." }
-    
-    [xml]$config = Get-Content $xmlPath
-    $users = $config.SelectNodes("//user")
-    
-    if ($users.Count -eq 0) {
-        Escribir-Info "No hay usuarios."
-    } else {
-        foreach ($u in $users) {
-            $nombre = $u.name
-            $grupo = $u.SelectSingleNode("description").InnerText
-            $linea = "- $nombre ($grupo)"
-            if ($grupo -eq "reprobados") { Write-Host $linea -ForegroundColor Red } 
-            else { Write-Host $linea -ForegroundColor Yellow }
-        }
+while ($true) {
+    Clear-Host
+    Write-Host "=========================================" -ForegroundColor Magenta
+    Write-Host "   GESTOR FTP INDEPENDIENTE (ADSI)       " -ForegroundColor Magenta
+    Write-Host "=========================================" -ForegroundColor Magenta
+    Write-Host " 1) Inicializar Servidor FTP"
+    Write-Host " 2) Configurar Grupos y Boveda (Descargas)"
+    Write-Host " 3) Registrar Usuario (Alumno)"
+    Write-Host " 4) Blindar FTP con FTPS (SSL)"
+    Write-Host " 0) Salir"
+    $opc = Read-Host "Selecciona opcion"
+    switch ($opc) {
+        "1" { Inicializar-Sitio-FTP }
+        "2" { Registrar-Grupo-FTP }
+        "3" { Registrar-Alumno-FTP }
+        "4" { Activar-Seguridad-FTPS }
+        "0" { break }
     }
+    if ($opc -eq "0") { break }
 }
-
-function Menu-Principal {
-    while ($true) {
-        Clear-Host
-        Write-Host "`n==============================" -ForegroundColor Cyan
-        Write-Host " ADMINISTRADOR FTP (FileZilla)" -ForegroundColor White
-        Write-Host "==============================" -ForegroundColor Cyan
-        Write-Host " [1] Instalar y configurar" 
-        Write-Host " [2] Agregar usuarios" 
-        Write-Host " [3] Reasignar grupo" 
-        Write-Host " [4] Borrar usuario" 
-        Write-Host " [5] Ver usuarios" 
-        Write-Host " [0] Salir" -ForegroundColor DarkGray
-        Write-Host "------------------------------" -ForegroundColor Cyan
-        
-        $opt = Read-Host "Opcion"
-
-        switch ($opt) {
-            "1" { Opcion-Instalar-FTP }
-            "2" { Opcion-Crear-Usuarios }
-            "3" { Opcion-Cambiar-Grupo }
-            "4" { Opcion-Eliminar-Usuario }
-            "5" { Opcion-Ver-Usuarios }
-            "0" { exit }
-            default { Escribir-ErrorMsg "Opcion no valida." }
-        }
-        
-        Write-Host ""
-        $null = Read-Host "Presiona ENTER para continuar"
-    }
-}
-
-Menu-Principal
