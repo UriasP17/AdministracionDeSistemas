@@ -33,8 +33,7 @@ $script:SERVICIOS_VERIFICAR   = @()
 # =============================================================
 function Main {
     while ($true) {
-        Write-Host ""
-        Write-Host "==========================================================" -ForegroundColor Magenta
+        Write-Host "`n==========================================================" -ForegroundColor Magenta
         Write-Host "   PRACTICA 7 - ORQUESTADOR DE SERVICIOS (WINDOWS)        " -ForegroundColor Magenta
         Write-Host "==========================================================" -ForegroundColor Magenta
         Write-Host " 1) Preparar estructura y Servidores FTP (Python)"
@@ -50,13 +49,10 @@ function Main {
             "0" { Mostrar-Resumen; Write-Host "Saliendo..." -ForegroundColor Yellow; return }
             "1" { Preparar-Repositorios-FTP; continue }
             "5" { Mostrar-Resumen; continue }
-            { $_ -in "2","3","4" } { 
-                # Continúa el flujo normal hacia la instalación
-            }
+            { $_ -in "2","3","4" } { }
             default { Write-Host "Opcion invalida." -ForegroundColor Red; continue }
         }
 
-        # Asignar el nombre del servicio basándonos en la opción elegida
         $nombreServicio = switch ($opcion) {
             "2" { "IIS" }
             "3" { "Apache" }
@@ -344,4 +340,45 @@ function Instalar-Nginx {
 
     $pHttp = Read-Host "Puerto HTTP [Enter=8081]"; if (!$pHttp) { $pHttp = 8081 }
     
-    if ($SSL -eq "S")
+    if ($SSL -eq "S") {
+        $pHttps = Read-Host "Puerto HTTPS [Enter=8444]"; if (!$pHttps) { $pHttps = 8444 }
+        $script:RESUMEN_INSTALACIONES += "Nginx | SSL: SI | Puertos: $pHttp / $pHttps"
+    } else {
+        $script:RESUMEN_INSTALACIONES += "Nginx | SSL: NO | Puerto: $pHttp"
+    }
+    
+    Start-Process "$NGINX_DIR\nginx.exe" -WorkingDirectory $NGINX_DIR -WindowStyle Hidden
+    $script:SERVICIOS_VERIFICAR += "Nginx|nginx|$pHttp|http"
+    Write-Host "  + Nginx instalado y corriendo." -ForegroundColor Green
+}
+
+# =============================================================
+# RESUMEN (PRACTICA 7)
+# =============================================================
+function Mostrar-Resumen {
+    Write-Host "`n==========================================================" -ForegroundColor Magenta
+    Write-Host "         RESUMEN AUTOMATIZADO DE INSTALACIONES           " -ForegroundColor Magenta
+    Write-Host "==========================================================" -ForegroundColor Magenta
+    
+    foreach ($r in $script:RESUMEN_INSTALACIONES) { Write-Host "  -> $r" -ForegroundColor Cyan }
+    Write-Host "`n-- Pruebas de Conexion Activas --"
+    
+    foreach ($entrada in $script:SERVICIOS_VERIFICAR) {
+        $p = $entrada -split "\|"
+        try {
+            $r = Invoke-WebRequest "$($p[3])://127.0.0.1:$($p[2])" -UseBasicParsing -TimeoutSec 3 -ErrorAction Stop
+            Write-Host "  [$($p[0])] Puerto:$($p[2]) -> ESTADO HTTP $($r.StatusCode) (EXITO)" -ForegroundColor Green
+        } catch {
+            Write-Host "  [$($p[0])] Puerto:$($p[2]) -> FALLO O TIMEOUT" -ForegroundColor Red
+        }
+    }
+    
+    Write-Host "`n-- Servidores FTP Python independientes ------------------"
+    foreach ($svc in @("IIS","Apache","Nginx")) {
+        $puerto = $FTP_PUERTOS[$svc]
+        $estado = if (netstat -an | Select-String ":$puerto ") { "ACTIVO" } else { "INACTIVO" }
+        Write-Host "  [FTP-${svc}] Puerto:$puerto -> $estado"
+    }
+}
+
+Main
