@@ -124,9 +124,11 @@ function Generar-Certificado-SSL {
 }
 
 function Obtener-CertObj {
-    $certObj = Get-ChildItem "Cert:\LocalMachine\My" | Where-Object { $_.Subject -like "*reprobados*" } | Select-Object -First 1
+    $certObj = Get-ChildItem "Cert:\LocalMachine\My" | Where-Object { $_.Subject -like "*CN=www.reprobados.com*" } | Select-Object -First 1
+    
     if (!$certObj) {
-        $certObj = New-SelfSignedCertificate -DnsName "www.reprobados.com" -CertStoreLocation "Cert:\LocalMachine\My" -NotAfter (Get-Date).AddDays(365) -KeyExportPolicy Exportable
+        $subject = "C=MX, S=Sinaloa, L=LosMochis, O=Reprobados, CN=www.reprobados.com"
+        $certObj = New-SelfSignedCertificate -Subject $subject -CertStoreLocation "Cert:\LocalMachine\My" -NotAfter (Get-Date).AddDays(365) -KeyExportPolicy Exportable
     }
     return $certObj
 }
@@ -415,7 +417,6 @@ function Instalar-Servicio {
 
     if ($origen -eq "1") {
         if ($Servicio -eq "iis") {
-            # NUEVO: ¡Aquí agregamos Web-Ftp-Server para que funcione tu Opción 4!
             Write-Host "[*] Instalando IIS y el modulo de FTP... (esto puede tardar unos minutos)" -ForegroundColor Cyan
             Install-WindowsFeature -Name Web-Server, Web-Ftp-Server, Web-Ftp-Service, Web-Http-Redirect, Web-Mgmt-Tools, Web-Scripting-Tools -IncludeManagementTools
             Write-Host "[OK] IIS instalado correctamente." -ForegroundColor Green
@@ -476,7 +477,6 @@ function Instalar-Servicio {
 function Configurar-FTP-Seguro {
     $appcmd = "$env:windir\system32\inetsrv\appcmd.exe"
 
-    # NUEVO: Proteccion por si no has instalado IIS
     if (-not (Test-Path $appcmd)) {
         Write-Host "[!] ERROR: No tienes instalado IIS ni el servidor FTP." -ForegroundColor Red
         Write-Host "    Usa la Opcion 3 del menu para instalar IIS primero." -ForegroundColor Yellow
@@ -517,10 +517,7 @@ function Configurar-FTP-Seguro {
 function Asegurar-FTP-Activo {
     $appcmd = "$env:windir\system32\inetsrv\appcmd.exe"
     
-    # NUEVO: Evita que el script explote apenas lo abres
-    if (-not (Test-Path $appcmd)) {
-        return # Sale sin hacer ruido si no hay IIS instalado
-    }
+    if (-not (Test-Path $appcmd)) { return }
 
     $ftpActivo = Get-NetTCPConnection -LocalPort 21 -State Listen -ErrorAction SilentlyContinue
     if (!$ftpActivo) {
