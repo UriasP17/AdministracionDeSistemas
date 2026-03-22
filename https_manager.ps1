@@ -1,6 +1,6 @@
-# ==============================================================================
+
 # MODULO HTTP/FTP COMBINADO - WINDOWS (P07)
-# ==============================================================================
+
 
 Import-Module WebAdministration -ErrorAction SilentlyContinue
 
@@ -9,9 +9,8 @@ $PUERTOS_BLOQUEADOS = @(1,7,9,11,13,15,17,19,20,21,22,23,25,37,42,43,53,69,77,79
     465,512,513,514,515,526,530,531,532,540,548,554,556,563,587,601,636,993,995,
     2049,3659,4045,6000,6665,6666,6667,6668,6669,6697)
 
-# ================================================================
 # LIMPIEZA Y PAGINA
-# ================================================================
+
 function Garantizar-Chocolatey {
     $chocoPath = "C:\ProgramData\chocolatey\bin\choco.exe"
     if (!(Test-Path $chocoPath)) {
@@ -58,6 +57,7 @@ function Crear-Pagina {
 
     $servidorNombre = $servicio.ToUpper()
 
+   
     $html = @"
 <!DOCTYPE html>
 <html lang="es">
@@ -77,19 +77,20 @@ function Crear-Pagina {
 <div class="wrap">
   <div class="dot"></div>
   <h1>$servidorNombre</h1>
-  <div class="badge">● $msg</div>
-  <div class="meta">www.reprobados.com &nbsp;·&nbsp; :$puerto</div>
+  <div class="badge">$msg</div>
+  <div class="meta">www.reprobados.com - Puerto: $puerto</div>
 </div>
 </body>
 </html>
 "@
 
-    Set-Content -Path $path -Value $html -Encoding UTF8 -Force
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllText($path, $html, $utf8NoBom)
 }
 
-# ================================================================
+
 # CERTIFICADO SSL
-# ================================================================
 
 function Generar-Certificado-SSL {
     $dir = "C:\ssl\reprobados"
@@ -136,9 +137,7 @@ function Obtener-CertObj {
     return $certObj
 }
 
-# ================================================================
 # DESPLIEGUE POR SERVICIO
-# ================================================================
 
 function Aplicar-Despliegue {
     param($Servicio)
@@ -348,9 +347,7 @@ http {
     Pause
 }
 
-# ================================================================
 # FTP E INSTALACION
-# ================================================================
 
 function Listar-Archivos-FTP {
     param($url, $usuario, $clave)
@@ -475,9 +472,7 @@ function Instalar-Servicio {
     if ($dep -match '^[Ss]$') { Aplicar-Despliegue $Servicio }
 }
 
-# ================================================================
 # FTP SEGURO E INICIALIZACION
-# ================================================================
 
 function Configurar-FTP-Seguro {
     $appcmd = "$env:windir\system32\inetsrv\appcmd.exe"
@@ -553,9 +548,7 @@ function Mostrar-Resumen {
     Pause
 }
 
-# ================================================================
 # MENU PRINCIPAL
-# ================================================================
 
 function Menu-FTP-HTTP {
     $global:FTP_IP   = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceAlias -notlike "*Loopback*" -and $_.IPAddress -notlike "169.*" } | Select-Object -First 1).IPAddress
