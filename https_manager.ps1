@@ -1,6 +1,3 @@
-# ==============================================================================
-# MODULO HTTP/FTP COMBINADO - WINDOWS (P07)
-# ==============================================================================
 
 Import-Module WebAdministration -ErrorAction SilentlyContinue
 
@@ -44,6 +41,14 @@ function Crear-Pagina {
     }
     $path = $paths[$servicio]
     if (!$path) { return }
+    
+    # NUEVO: Si es IIS, borramos la basura vieja para que no estorben
+    if ($servicio -eq "iis") {
+        $webRoot = "C:\inetpub\wwwroot"
+        if (Test-Path $webRoot) {
+            Get-ChildItem -Path $webRoot -File -ErrorAction SilentlyContinue | Remove-Item -Force
+        }
+    }
     
     $color = "#009688"
     $icon  = "●"
@@ -314,16 +319,10 @@ http {
             $webRoot = "C:\inetpub\wwwroot"
             
             if ($usarSSL) {
-                # Creamos el sitio base en el puerto 80 para poder configurarle SSL en el puerto elegido
                 New-Website -Name "SitioP7" -Port 80 -PhysicalPath $webRoot -Force | Out-Null
-                
-                # Limpiamos bindings de SSL viejos
                 Get-ChildItem -Path "IIS:\SslBindings" | Where-Object { $_.Port -eq $P } | Remove-Item -Force -ErrorAction SilentlyContinue
-                
-                # Le agregamos el protocolo HTTPS
                 New-WebBinding -Name "SitioP7" -IPAddress "*" -Port $P -Protocol "https"
                 
-                # Lo vinculamos con el certificado
                 $certObj = Obtener-CertObj
                 if ($certObj) {
                     $certObj | New-Item -Path "IIS:\SslBindings\*!$P" -Force | Out-Null
@@ -417,11 +416,17 @@ function Instalar-Servicio {
 
     if ($origen -eq "1") {
         if ($Servicio -eq "iis") {
-            Write-Host "[*] Instalando IIS y el modulo de FTP... (esto puede tardar unos minutos)" -ForegroundColor Cyan
-            Install-WindowsFeature -Name Web-Server, Web-Ftp-Server, Web-Ftp-Service, Web-Http-Redirect, Web-Mgmt-Tools, Web-Scripting-Tools -IncludeManagementTools
-            Write-Host "[OK] IIS instalado correctamente." -ForegroundColor Green
-            Pause
-            $dep = Read-Host "Desplegar IIS en puerto $global:PUERTO_ACTUAL? [S/N]"
+            # NUEVO: Validar si ya está instalado para no perder tiempo
+            $checkIIS = Get-WindowsFeature -Name Web-Server -ErrorAction SilentlyContinue
+            if ($checkIIS.Installed) {
+                Write-Host "[OK] IIS ya se encuentra instalado en el sistema." -ForegroundColor Green
+            } else {
+                Write-Host "[*] Instalando IIS y el modulo de FTP... (esto puede tardar unos minutos)" -ForegroundColor Cyan
+                Install-WindowsFeature -Name Web-Server, Web-Ftp-Server, Web-Ftp-Service, Web-Http-Redirect, Web-Mgmt-Tools, Web-Scripting-Tools -IncludeManagementTools
+                Write-Host "[OK] IIS instalado correctamente." -ForegroundColor Green
+            }
+            
+            $dep = Read-Host "Desplegar IIS ahora? [S/N]"
             if ($dep -match '^[Ss]$') { Aplicar-Despliegue "iis" }
             return
         }
@@ -543,7 +548,7 @@ function Mostrar-Resumen {
     Write-Host "   RESUMEN DE INFRAESTRUCTURA" -ForegroundColor Cyan
     Write-Host "============================================================" -ForegroundColor Cyan
     Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | 
-        Where-Object { $_.LocalPort -in @(80,443,21,8080,8081,8443,9090,$global:PUERTO_ACTUAL) } |
+        Where-Object { $_.LocalPort -in @(80,443,21,8080,8081,8082,8443,9090,$global:PUERTO_ACTUAL) } |
         Select-Object LocalAddress, LocalPort | Sort-Object LocalPort | Format-Table -AutoSize
     Pause
 }
