@@ -377,8 +377,9 @@ function Instalar-Servicio {
         Write-Host "[OK] Instalacion completada." -ForegroundColor Green
         
     } else {
-        # === INSTALACION POR FTP SEGURO (FTPS) ===
-        $ftpRuta = "ftp://$($global:FTP_IP)/http/Windows/$ServicioFTP"
+        # === DESCARGA DESDE FTP IIS AISLADO ===
+        # La ruta DEBE empezar con LocalUser/Public por el UserIsolation de tu servidor IIS
+        $ftpRuta = "ftp://$($global:FTP_IP)/LocalUser/Public/general/http/Windows/$ServicioFTP"
         
         $archivo = switch ($Servicio.ToLower()) {
             "nginx"  { "nginx.zip" }
@@ -390,34 +391,32 @@ function Instalar-Servicio {
         $destLocal = Join-Path $env:TEMP $archivo
         $hashFileLocal = Join-Path $env:TEMP "$archivo.sha256"
 
-        Write-Host "[*] Descargando $archivo desde $ftpRuta (FTP Seguro)..." -ForegroundColor Cyan
+        Write-Host "[*] Descargando $archivo desde FTP IIS ($ftpRuta)..." -ForegroundColor Cyan
         
         try {
-            function Bajar-FTPS($url, $destino) {
-                # Ignorar validacion de certificado autofirmado (evita errores de SSL root)
-                [System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}
-                
-                $req = [System.Net.WebRequest]::Create($url)
-                $req.Method = [System.Net.WebRequestMethods+Ftp]::DownloadFile
-                
-                # PARCHE PARA ERROR 530 (Not Logged In): Mandar string vacio
-                $req.Credentials = New-Object System.Net.NetworkCredential("anonymous", "")
-                
-                $req.EnableSsl = $true
-                # PARCHE PARA ERROR 530 en transferencias: Modo Activo en vez de Pasivo
-                $req.UsePassive = $false 
-                $req.UseBinary = $true
-                
-                $resp = $req.GetResponse()
-                $stream = $resp.GetResponseStream()
-                $fs = [System.IO.File]::Create($destino)
-                $stream.CopyTo($fs)
-                $fs.Close(); $stream.Close(); $resp.Close()
+            # 1. Ignorar errores de certificados autofirmados
+            if (-not ([System.Management.Automation.PSTypeName]'TrustAllCertsPolicy').Type) {
+                add-type @"
+                    using System.Net;
+                    using System.Security.Cryptography.X509Certificates;
+                    public class TrustAllCertsPolicy : ICertificatePolicy {
+                        public bool CheckValidationResult(
+                            ServicePoint srvPoint, X509Certificate certificate,
+                            WebRequest request, int certificateProblem) {
+                            return true;
+                        }
+                    }
+"@
             }
+            [System.Net.ServicePointManager]::CertificatePolicy = New-Object TrustAllCertsPolicy
+            
+            # 2. Credencial obligatoria: anonymous y password con arroba (IIS lo requiere asi)
+            $passSecure = ConvertTo-SecureString "anonymous@" -AsPlainText -Force
+            $cred = New-Object System.Management.Automation.PSCredential("anonymous", $passSecure)
 
-            # Descargar archivo e info hash
-            Bajar-FTPS "$ftpRuta/$archivo" $destLocal
-            Bajar-FTPS "$ftpRuta/$archivo.sha256" $hashFileLocal
+            # 3. Descargamos usando Invoke-WebRequest nativo
+            Invoke-WebRequest -Uri "$ftpRuta/$archivo" -OutFile $destLocal -Credential $cred -ErrorAction Stop
+            Invoke-WebRequest -Uri "$ftpRuta/$archivo.sha256" -OutFile $hashFileLocal -Credential $cred -ErrorAction Stop
             
             Write-Host "[*] Validando integridad (Get-FileHash)..." -ForegroundColor Yellow
             
@@ -426,8 +425,6 @@ function Instalar-Servicio {
 
             if ($hashCalculado -ne $hashEsperado) {
                 Write-Host "[!] HASH INVALIDO. Archivo corrupto." -ForegroundColor Red
-                Write-Host "    Calculado: $hashCalculado" -ForegroundColor Red
-                Write-Host "    Esperado : $hashEsperado" -ForegroundColor Red
                 Pause
                 return
             }
@@ -441,7 +438,7 @@ function Instalar-Servicio {
                 Start-Process msiexec.exe -ArgumentList "/i `"$destLocal`" /quiet" -Wait
             }
         } catch {
-            Write-Host "[!] Error descargando archivo desde FTP Seguro: $_" -ForegroundColor Red
+            Write-Host "[!] Error descargando archivo desde FTP: $_" -ForegroundColor Red
             Pause
             return
         }
@@ -456,64 +453,9 @@ function Instalar-Servicio {
 # ================================================================
 
 function Configurar-FTP-Seguro {
-    $appcmd = "$env:windir\system32\inetsrv\appcmd.exe"
-
-    if (-not (Test-Path $appcmd)) {
-        Write-Host "[!] ERROR: No tienes instalado IIS ni el servidor FTP." -ForegroundColor Red
-        Write-Host "    Usa la Opcion 3 del menu para instalar IIS primero." -ForegroundColor Yellow
-        Pause
-        return
-    }
-
-    $sitioFTP = & $appcmd list site 2>$null | ForEach-Object { if ($_ -match 'SITE object "([^"]+)"') { $matches[1] } } | Where-Object { $_ -ne "" } | Select-Object -First 1
-
-    if (!$sitioFTP) {
-        if (!(Test-Path "C:\FTP_Publico")) { New-Item "C:\FTP_Publico" -ItemType Directory -Force | Out-Null }
-        & $appcmd add site /name:"ServidorFTP" /bindings:"ftp/*:21:" /physicalPath:"C:\FTP_Publico" 2>$null
-        $sitioFTP = "ServidorFTP"
-    }
-
-    Write-Host "[*] Sitio FTP detectado: $sitioFTP" -ForegroundColor Cyan
-    $certObj = Obtener-CertObj
-    
-    # Configuramos TLS Obligatorio
-    & $appcmd set site "$sitioFTP" "-ftpServer.security.ssl.controlChannelPolicy:SslAllow" 2>$null
-    & $appcmd set site "$sitioFTP" "-ftpServer.security.ssl.dataChannelPolicy:SslAllow" 2>$null
-    & $appcmd set site "$sitioFTP" "-ftpServer.security.ssl.serverCertHash:$($certObj.Thumbprint)" 2>$null
-    
-    # Desbloquear reglas de autorizacion y aplicar permisos (Fix error overrideModeDefault)
-    & $appcmd unlock config -section:system.ftpServer/security/authorization 2>$null
-    & $appcmd set config "$sitioFTP" /section:system.ftpServer/security/authentication/anonymousAuthentication /enabled:true /commit:apphost 2>$null
-    & $appcmd set config "$sitioFTP" /section:system.ftpServer/security/authentication/basicAuthentication /enabled:true /commit:apphost 2>$null
-    
-    # Usar PowerShell Nativo para meter la regla de lectura a Anonimos sin errores raros
-    try {
-        Add-WebConfiguration -Filter "/system.ftpServer/security/authorization" -Value @{accessType="Allow"; users="*"; permissions="Read, Write"} -PSPath "IIS:\Sites\$sitioFTP" -ErrorAction SilentlyContinue
-    } catch {}
-
-    Set-Service ftpsvc -StartupType Automatic -ErrorAction SilentlyContinue
-    Start-Service ftpsvc -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 2
-    & $appcmd start site "$sitioFTP" 2>$null
-    Start-Sleep -Seconds 2
-
-    if (Get-NetTCPConnection -LocalPort 21 -State Listen -ErrorAction SilentlyContinue) {
-        Write-Host "[OK] FTP ONLINE en puerto 21 - Sitio: $sitioFTP" -ForegroundColor Green
-    } else {
-        Write-Host "[!] FTP no levanto. Asegurate de haber instalado IIS con soporte FTP." -ForegroundColor Red
-    }
+    Write-Host "[!] Nota: Esta configuracion ahora se maneja en tu script IIS separado." -ForegroundColor Yellow
+    Write-Host "    Asegurate de haber corrido la Opcion 1 de tu script de Administrador FTP." -ForegroundColor Yellow
     Pause
-}
-
-function Asegurar-FTP-Activo {
-    $appcmd = "$env:windir\system32\inetsrv\appcmd.exe"
-    if (-not (Test-Path $appcmd)) { return }
-
-    $ftpActivo = Get-NetTCPConnection -LocalPort 21 -State Listen -ErrorAction SilentlyContinue
-    if (!$ftpActivo) {
-        Set-Service ftpsvc -StartupType Automatic -ErrorAction SilentlyContinue
-        Start-Service ftpsvc -ErrorAction SilentlyContinue
-    }
 }
 
 function Validar-Puerto-Seguro {
@@ -538,12 +480,13 @@ function Mostrar-Resumen {
 
 function Mostrar-Arbol-FTP {
     Write-Host "`n============================================================" -ForegroundColor Yellow
-    Write-Host "   ESTRUCTURA DEL DIRECTORIO FTP (C:\FTP_Publico)" -ForegroundColor Yellow
+    Write-Host "   ESTRUCTURA DEL DIRECTORIO FTP (C:\inetpub\ftproot\general)" -ForegroundColor Yellow
     Write-Host "============================================================" -ForegroundColor Yellow
-    if (Test-Path "C:\FTP_Publico") {
-        cmd.exe /c "tree C:\FTP_Publico /F /A"
+    if (Test-Path "C:\inetpub\ftproot\general") {
+        cmd.exe /c "tree C:\inetpub\ftproot\general /F /A"
     } else {
-        Write-Host "[!] El directorio C:\FTP_Publico aun no existe." -ForegroundColor Red
+        Write-Host "[!] El directorio C:\inetpub\ftproot\general aun no existe." -ForegroundColor Red
+        Write-Host "    Corre el script de IIS del profe primero." -ForegroundColor Yellow
     }
     Pause
 }
@@ -557,8 +500,6 @@ function Menu-FTP-HTTP {
     $global:FTP_IP   = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceAlias -notlike "*Loopback*" -and $_.IPAddress -notlike "169.*" } | Select-Object -First 1).IPAddress
     if (!$global:FTP_IP) { $global:FTP_IP = "192.168.56.10" }
 
-    Asegurar-FTP-Activo
-
     while ($true) {
         $p = if ($global:PUERTO_ACTUAL -and $global:PUERTO_ACTUAL -ne "N/A") { $global:PUERTO_ACTUAL } else { "N/A" }
         Write-Host ""
@@ -568,8 +509,8 @@ function Menu-FTP-HTTP {
         Write-Host "====================================================" -ForegroundColor Cyan
         Write-Host " 1) Instalar + Desplegar Nginx"
         Write-Host " 2) Instalar + Desplegar Apache"
-        Write-Host " 3) Instalar + Desplegar IIS (HTTP + FTP)"
-        Write-Host " 4) Configurar FTP Seguro (TLS)"
+        Write-Host " 3) Instalar + Desplegar IIS (HTTP)"
+        Write-Host " 4) Configurar FTP Seguro (Aviso)"
         Write-Host " 5) Configurar Puerto"
         Write-Host "----------------------------------------------------"
         Write-Host " 6) Mostrar Resumen de Puertos"
