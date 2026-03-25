@@ -444,3 +444,152 @@ function Instalar-Servicio {
             Write-Host "[!] Error descargando archivo desde FTP Seguro: $_" -ForegroundColor Red
             Pause
             return
+        }
+    }
+
+    $dep = Read-Host "Desplegar ahora? [S/N]"
+    if ($dep -match '^[Ss]$') { Aplicar-Despliegue $Servicio }
+}
+
+# ================================================================
+# FTP SEGURO E INICIALIZACION
+# ================================================================
+
+function Configurar-FTP-Seguro {
+    $appcmd = "$env:windir\system32\inetsrv\appcmd.exe"
+
+    if (-not (Test-Path $appcmd)) {
+        Write-Host "[!] ERROR: No tienes instalado IIS ni el servidor FTP." -ForegroundColor Red
+        Write-Host "    Usa la Opcion 3 del menu para instalar IIS primero." -ForegroundColor Yellow
+        Pause
+        return
+    }
+
+    $sitioFTP = & $appcmd list site 2>$null | ForEach-Object { if ($_ -match 'SITE object "([^"]+)"') { $matches[1] } } | Where-Object { $_ -ne "" } | Select-Object -First 1
+
+    if (!$sitioFTP) {
+        if (!(Test-Path "C:\FTP_Publico")) { New-Item "C:\FTP_Publico" -ItemType Directory -Force | Out-Null }
+        & $appcmd add site /name:"ServidorFTP" /bindings:"ftp/*:21:" /physicalPath:"C:\FTP_Publico" 2>$null
+        $sitioFTP = "ServidorFTP"
+    }
+
+    Write-Host "[*] Sitio FTP detectado: $sitioFTP" -ForegroundColor Cyan
+    $certObj = Obtener-CertObj
+    
+    # Configuramos TLS Obligatorio
+    & $appcmd set site "$sitioFTP" "-ftpServer.security.ssl.controlChannelPolicy:SslAllow" 2>$null
+    & $appcmd set site "$sitioFTP" "-ftpServer.security.ssl.dataChannelPolicy:SslAllow" 2>$null
+    & $appcmd set site "$sitioFTP" "-ftpServer.security.ssl.serverCertHash:$($certObj.Thumbprint)" 2>$null
+    
+    # Desbloquear reglas de autorizacion y aplicar permisos (Fix error overrideModeDefault)
+    & $appcmd unlock config -section:system.ftpServer/security/authorization 2>$null
+    & $appcmd set config "$sitioFTP" /section:system.ftpServer/security/authentication/anonymousAuthentication /enabled:true /commit:apphost 2>$null
+    & $appcmd set config "$sitioFTP" /section:system.ftpServer/security/authentication/basicAuthentication /enabled:true /commit:apphost 2>$null
+    
+    # Usar PowerShell Nativo para meter la regla de lectura a Anonimos sin errores raros
+    try {
+        Add-WebConfiguration -Filter "/system.ftpServer/security/authorization" -Value @{accessType="Allow"; users="*"; permissions="Read, Write"} -PSPath "IIS:\Sites\$sitioFTP" -ErrorAction SilentlyContinue
+    } catch {}
+
+    Set-Service ftpsvc -StartupType Automatic -ErrorAction SilentlyContinue
+    Start-Service ftpsvc -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+    & $appcmd start site "$sitioFTP" 2>$null
+    Start-Sleep -Seconds 2
+
+    if (Get-NetTCPConnection -LocalPort 21 -State Listen -ErrorAction SilentlyContinue) {
+        Write-Host "[OK] FTP ONLINE en puerto 21 - Sitio: $sitioFTP" -ForegroundColor Green
+    } else {
+        Write-Host "[!] FTP no levanto. Asegurate de haber instalado IIS con soporte FTP." -ForegroundColor Red
+    }
+    Pause
+}
+
+function Asegurar-FTP-Activo {
+    $appcmd = "$env:windir\system32\inetsrv\appcmd.exe"
+    if (-not (Test-Path $appcmd)) { return }
+
+    $ftpActivo = Get-NetTCPConnection -LocalPort 21 -State Listen -ErrorAction SilentlyContinue
+    if (!$ftpActivo) {
+        Set-Service ftpsvc -StartupType Automatic -ErrorAction SilentlyContinue
+        Start-Service ftpsvc -ErrorAction SilentlyContinue
+    }
+}
+
+function Validar-Puerto-Seguro {
+    while ($true) {
+        $nuevo = Read-Host "Ingrese el puerto (recomendado: 8080, 8443, 9090)"
+        if (-not ($nuevo -match '^\d+$') -or [int]$nuevo -lt 1 -or [int]$nuevo -gt 65535) { continue }
+        $global:PUERTO_ACTUAL = $nuevo
+        Write-Host "[OK] Puerto $nuevo asignado." -ForegroundColor Green
+        return
+    }
+}
+
+function Mostrar-Resumen {
+    Write-Host "`n============================================================" -ForegroundColor Cyan
+    Write-Host "   RESUMEN DE INFRAESTRUCTURA" -ForegroundColor Cyan
+    Write-Host "============================================================" -ForegroundColor Cyan
+    Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | 
+        Where-Object { $_.LocalPort -in @(80,443,21,8080,8081,8082,8443,9090,$global:PUERTO_ACTUAL) } |
+        Select-Object LocalAddress, LocalPort | Sort-Object LocalPort | Format-Table -AutoSize
+    Pause
+}
+
+function Mostrar-Arbol-FTP {
+    Write-Host "`n============================================================" -ForegroundColor Yellow
+    Write-Host "   ESTRUCTURA DEL DIRECTORIO FTP (C:\FTP_Publico)" -ForegroundColor Yellow
+    Write-Host "============================================================" -ForegroundColor Yellow
+    if (Test-Path "C:\FTP_Publico") {
+        cmd.exe /c "tree C:\FTP_Publico /F /A"
+    } else {
+        Write-Host "[!] El directorio C:\FTP_Publico aun no existe." -ForegroundColor Red
+    }
+    Pause
+}
+
+# ================================================================
+# MENU PRINCIPAL
+# ================================================================
+
+function Menu-FTP-HTTP {
+    # Sacamos la IP automaticamente
+    $global:FTP_IP   = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceAlias -notlike "*Loopback*" -and $_.IPAddress -notlike "169.*" } | Select-Object -First 1).IPAddress
+    if (!$global:FTP_IP) { $global:FTP_IP = "192.168.56.10" }
+
+    Asegurar-FTP-Activo
+
+    while ($true) {
+        $p = if ($global:PUERTO_ACTUAL -and $global:PUERTO_ACTUAL -ne "N/A") { $global:PUERTO_ACTUAL } else { "N/A" }
+        Write-Host ""
+        Write-Host "====================================================" -ForegroundColor Cyan
+        Write-Host "      MODULO HTTP/FTP - IP: $global:FTP_IP" -ForegroundColor Cyan
+        Write-Host "      PUERTO CONFIGURADO: $p" -ForegroundColor Yellow
+        Write-Host "====================================================" -ForegroundColor Cyan
+        Write-Host " 1) Instalar + Desplegar Nginx"
+        Write-Host " 2) Instalar + Desplegar Apache"
+        Write-Host " 3) Instalar + Desplegar IIS (HTTP + FTP)"
+        Write-Host " 4) Configurar FTP Seguro (TLS)"
+        Write-Host " 5) Configurar Puerto"
+        Write-Host "----------------------------------------------------"
+        Write-Host " 6) Mostrar Resumen de Puertos"
+        Write-Host " 7) Mostrar Arbol del Directorio FTP"
+        Write-Host " 8) Salir"
+        Write-Host "===================================================="
+        $opcion = Read-Host " Opcion"
+
+        switch ($opcion) {
+            "1" { Instalar-Servicio "nginx"  }
+            "2" { Instalar-Servicio "apache" }
+            "3" { Instalar-Servicio "iis"    }
+            "4" { Configurar-FTP-Seguro }
+            "5" { Validar-Puerto-Seguro }
+            "6" { Mostrar-Resumen }
+            "7" { Mostrar-Arbol-FTP }
+            "8" { return }
+            default { Write-Host "Invalido" -ForegroundColor Red }
+        }
+    }
+}
+
+Menu-FTP-HTTP
