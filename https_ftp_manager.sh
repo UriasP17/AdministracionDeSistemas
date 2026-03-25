@@ -1,66 +1,70 @@
-#!/bin/bash
+# ==============================================================================
+# MODULO HTTP/FTP COMBINADO - WINDOWS (P07)
+# ==============================================================================
 
-# Colores para la consola
-CYAN='\033[0;36m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-GRAY='\033[0;90m'
-NC='\033[0m' # No Color
+Import-Module WebAdministration -ErrorAction SilentlyContinue
 
-PUERTOS_BLOQUEADOS=(1 7 9 11 13 15 17 19 20 21 22 23 25 37 42 43 53 69 77 79 87 95 101 102 103 104 109 110 111 113 115 117 119 123 135 139 142 143 179 389 465 512 513 514 515 526 530 531 532 540 548 554 556 563 587 601 636 993 995 2049 3659 4045 6000 6665 6666 6667 6668 6669 6697)
-
-PUERTO_ACTUAL="N/A"
-
-
-if [ "$EUID" -ne 0 ]; then
-  echo -e "${RED}[!] Por favor ejecuta este script como root (sudo su).${NC}"
-  exit
-fi
-
-# Deshabilitar SELinux temporalmente para evitar problemas de permisos con puertos custom y certificados
-setenforce 0 2>/dev/null
-echo -e "${GRAY}[*] SELinux ajustado a Permissive para la practica.${NC}"
+$PUERTOS_BLOQUEADOS = @(1,7,9,11,13,15,17,19,20,21,22,23,25,37,42,43,53,69,77,79,
+    87,95,101,102,103,104,109,110,111,113,115,117,119,123,135,139,142,143,179,389,
+    465,512,513,514,515,526,530,531,532,540,548,554,556,563,587,601,636,993,995,
+    2049,3659,4045,6000,6665,6666,6667,6668,6669,6697)
 
 # ================================================================
 # LIMPIEZA Y PAGINA
 # ================================================================
-Limpiar_Entorno() {
-    local puerto=$1
-    echo -e "${GRAY}[*] Limpiando servicios en puerto $puerto...${NC}"
-    systemctl stop nginx httpd tomcat vsftpd 2>/dev/null
-    fuser -k ${puerto}/tcp 2>/dev/null
-    sleep 2
+
+function Garantizar-Chocolatey {
+    $chocoPath = "C:\ProgramData\chocolatey\bin\choco.exe"
+    if (!(Test-Path $chocoPath)) {
+        Write-Host "[!] Chocolatey no detectado. Iniciando instalacion..." -ForegroundColor Yellow
+        Set-ExecutionPolicy Bypass -Scope Process -Force
+        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+        Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+        $env:Path += ";C:\ProgramData\chocolatey\bin"
+    }
+    return "C:\ProgramData\chocolatey\bin\choco.exe"
 }
 
-Crear_Pagina() {
-    local servicio=$1
-    local puerto=$2
-    local path=""
-    local color="#009688"
+function Limpiar-Entorno {
+    param($Puerto)
+    Write-Host "[*] Limpiando servicios en puerto $Puerto..." -ForegroundColor Gray
+    Stop-Service nginx, Apache, Apache2.4, W3SVC, ftpsvc -Force -ErrorAction SilentlyContinue
+    taskkill /F /IM nginx.exe /T 2>$null
+    taskkill /F /IM httpd.exe /T 2>$null
+    $con = Get-NetTCPConnection -LocalPort $Puerto -State Listen -ErrorAction SilentlyContinue
+    if ($con) { $con.OwningProcess | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue } }
+    Start-Sleep -Seconds 2
+}
+
+function Crear-Pagina {
+    param($servicio, $puerto)
     
-    if [ "$servicio" == "nginx" ]; then
-        path="/usr/share/nginx/html/index.html"
-        color="#009688" # Verde
-    elif [ "$servicio" == "apache" ]; then
-        path="/var/www/html/index.html"
-        color="#D32F2F" # Rojo
-    elif [ "$servicio" == "tomcat" ]; then
-        mkdir -p /var/lib/tomcat/webapps/ROOT 2>/dev/null
-        path="/var/lib/tomcat/webapps/ROOT/index.html"
-        color="#F57C00" # Naranja para Tomcat
-    fi
+    $paths = @{
+        "nginx"  = "C:\tools\nginx-1.29.6\html\index.html"
+        "apache" = "C:\Users\vboxuser\AppData\Roaming\Apache24\htdocs\index.html"
+        "iis"    = "C:\Sitio_IIS_Limpio\index.html"
+    }
+    
+    $path = $paths[$servicio]
+    if (!$path) { return }
+    
+    $dir = Split-Path $path
+    if (!(Test-Path $dir)) { New-Item $dir -ItemType Directory -Force | Out-Null }
+    
+    $color = "#009688"
+    $msg   = "Servicio Activo"
+    
+    if ($servicio -eq "apache") { $color = "#D32F2F" }
+    if ($servicio -eq "iis")    { $color = "#0288D1" }
 
-    mkdir -p "$(dirname "$path")" 2>/dev/null
-    local servNombre=${servicio^^}
+    $servidorNombre = $servicio.ToUpper()
 
-    # HTML Modificado: Texto ASCII limpio para evitar símbolos raros en los navegadores
-    cat <<EOF > "$path"
+    $html = @"
 <!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="UTF-8">
-<title>$servNombre</title>
+<title>$servidorNombre</title>
 <style>
   body { margin: 0; font-family: sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; background: #fafafa; color: #111; }
   .wrap { text-align: center; }
@@ -73,106 +77,119 @@ Crear_Pagina() {
 <body>
 <div class="wrap">
   <div class="dot"></div>
-  <h1>$servNombre</h1>
-  <div class="badge">Servicio Activo</div>
+  <h1>$servidorNombre</h1>
+  <div class="badge">$msg</div>
   <div class="meta">www.reprobados.com - Puerto: $puerto</div>
 </div>
 </body>
 </html>
-EOF
+"@
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllText($path, $html, $utf8NoBom)
 }
 
+
 # ================================================================
-# CERTIFICADO SSL Y FIREWALL
+# CERTIFICADO SSL
 # ================================================================
-Generar_Certificado_SSL() {
-    local dir="/etc/ssl/reprobados"
-    local crt="$dir/reprobados.crt"
-    local key="$dir/reprobados.key"
 
-    mkdir -p $dir
-
-    if [ -f "$crt" ] && [ -f "$key" ]; then
-        echo -e "${YELLOW}[*] Reutilizando certificado existente en $dir${NC}"
-        return 0
-    fi
-
-    echo -e "${CYAN}[*] Generando certificado SSL con OpenSSL...${NC}"
-    openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout $key -out $crt -subj "/C=MX/ST=Sinaloa/L=LosMochis/O=Reprobados/CN=www.reprobados.com" 2>/dev/null
+function Obtener-CertObj {
+    $certObj = Get-ChildItem "Cert:\LocalMachine\My" | Where-Object { $_.Subject -like "*CN=www.reprobados.com*" } | Select-Object -First 1
     
-    # Darle permisos para que otros servicios (como Tomcat) lo puedan leer
-    chmod 644 $crt
-    chmod 644 $key
+    if (!$certObj) {
+        Write-Host "[*] Generando Certificado Autofirmado con PowerShell..." -ForegroundColor Cyan
+        $subject = "C=MX, S=Sinaloa, L=LosMochis, O=Reprobados, CN=www.reprobados.com"
+        $certObj = New-SelfSignedCertificate -Subject $subject -DnsName "www.reprobados.com" -CertStoreLocation "Cert:\LocalMachine\My" -NotAfter (Get-Date).AddDays(365) -KeyExportPolicy Exportable
+    } else {
+        Write-Host "[*] Reutilizando Certificado SSL existente en el almacen." -ForegroundColor Yellow
+    }
+    
+    $dir = "C:\ssl\reprobados"
+    if (!(Test-Path $dir)) { New-Item $dir -ItemType Directory -Force | Out-Null }
+    
+    $crt = "$dir\reprobados.crt"
+    $key = "$dir\reprobados.key"
 
-    echo -e "${GREEN}[OK] Certificados creados en $dir${NC}"
-}
-
-Abrir_Firewall() {
-    local puerto=$1
-    echo -e "${GRAY}[*] Abriendo puerto $puerto en el firewall...${NC}"
-    firewall-cmd --add-port=${puerto}/tcp --permanent >/dev/null 2>&1
-    firewall-cmd --add-port=80/tcp --permanent >/dev/null 2>&1
-    firewall-cmd --add-port=443/tcp --permanent >/dev/null 2>&1
-    firewall-cmd --add-port=21/tcp --permanent >/dev/null 2>&1
-    firewall-cmd --reload >/dev/null 2>&1
+    if (!(Test-Path $crt) -or !(Test-Path $key)) {
+        $opensslPath = $null
+        foreach ($c in @("C:\Program Files\Git\usr\bin\openssl.exe","C:\Program Files (x86)\Git\usr\bin\openssl.exe","C:\ProgramData\chocolatey\bin\openssl.exe")) {
+            if (Test-Path $c) { $opensslPath = $c; break }
+        }
+        if ($opensslPath) {
+            & $opensslPath genrsa -out $key 2048 2>$null
+            & $opensslPath req -new -x509 -key $key -out $crt -days 365 -subj "/C=MX/ST=Sinaloa/L=LosMochis/O=Reprobados/CN=www.reprobados.com" 2>$null
+        }
+    }
+    
+    return $certObj
 }
 
 # ================================================================
 # DESPLIEGUE POR SERVICIO
 # ================================================================
-Aplicar_Despliegue() {
-    local servicio=$1
 
-    echo ""
-    read -p "Ingrese el puerto para $servicio (ej. 8080, 8443, 9090): " P_Ingresado
+function Aplicar-Despliegue {
+    param($Servicio)
+
+    Write-Host ""
+    $P_Ingresado = Read-Host "Ingrese el puerto para $Servicio (ej. 8081, 8443, 9090)"
     
-    if [[ "$P_Ingresado" =~ ^[0-9]+$ ]]; then
-        P=$P_Ingresado
-    else
-        echo -e "${YELLOW}[!] Puerto invalido, usando puerto por defecto: $PUERTO_ACTUAL${NC}"
-        P=$PUERTO_ACTUAL
-    fi
+    if ($P_Ingresado -match '^\d+$') {
+        $P = [int]$P_Ingresado
+    } else {
+        Write-Host "[!] Puerto invalido, usando puerto configurado por defecto: $global:PUERTO_ACTUAL" -ForegroundColor Yellow
+        $P = [int]$global:PUERTO_ACTUAL
+    }
 
-    Generar_Certificado_SSL
-    read -p "¿Desea activar SSL en este servicio? [S/N]: " respSSL
-    usarSSL=false
-    if [[ "$respSSL" =~ ^[Ss]$ ]]; then usarSSL=true; fi
+    if ($P -in $PUERTOS_BLOQUEADOS) {
+        Write-Host "[!] Advertencia: El puerto $P esta en la lista de bloqueados." -ForegroundColor Yellow
+        $confirma = Read-Host "Desea continuar de todos modos? [S/N]"
+        if ($confirma -notmatch '^[Ss]$') { return }
+    }
 
-    echo -e "${GRAY}[*] Preparando despliegue de $servicio en puerto $P...${NC}"
-    Limpiar_Entorno $P
-    Abrir_Firewall $P
+    $certObj = Obtener-CertObj
+    $respSSL  = Read-Host "Desea activar SSL en este servicio? [S/N]"
+    $usarSSL  = ($respSSL -match '^[Ss]$')
+    Write-Host "[*] SSL: $(if ($usarSSL) { 'ACTIVADO' } else { 'DESACTIVADO' })" -ForegroundColor $(if ($usarSSL) { 'Green' } else { 'Yellow' })
 
-    case $servicio in
-        "nginx")
-            local conf="/etc/nginx/nginx.conf"
-            local certAbs="/etc/ssl/reprobados/reprobados.crt"
-            local keyAbs="/etc/ssl/reprobados/reprobados.key"
+    Limpiar-Entorno $P
 
-            if [ "$usarSSL" = true ]; then
-                cat <<EOF > $conf
+    switch ($Servicio) {
+
+        "nginx" {
+            $nginxExeItem = Get-ChildItem "C:\tools" -Recurse -Filter "nginx.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (!$nginxExeItem) { Write-Host "[!] nginx no encontrado" -ForegroundColor Red; Pause; return }
+            $nginxDir = $nginxExeItem.DirectoryName
+            $conf     = "$nginxDir\conf\nginx.conf"
+            $certAbs  = "C:/ssl/reprobados/reprobados.crt"
+            $keyAbs   = "C:/ssl/reprobados/reprobados.key"
+
+            if ($usarSSL -and (Test-Path $certAbs)) {
+                $cfg = @"
+worker_processes  1;
 events { worker_connections 1024; }
 http {
     include       mime.types;
     default_type  application/octet-stream;
-    
     server {
         listen       80;
         server_name  www.reprobados.com;
-        return 301   https://\$host:$P\$request_uri;
+        return 301   https://`$host:$P`$request_uri;
     }
-
     server {
         listen       $P ssl;
         server_name  www.reprobados.com;
         ssl_certificate      $certAbs;
         ssl_certificate_key  $keyAbs;
         add_header Strict-Transport-Security "max-age=31536000" always;
-        location / { root /usr/share/nginx/html; index index.html; }
+        location / { root html; index index.html; }
     }
 }
-EOF
-            else
-                cat <<EOF > $conf
+"@
+            } else {
+                $cfg = @"
+worker_processes  1;
 events { worker_connections 1024; }
 http {
     include       mime.types;
@@ -180,33 +197,56 @@ http {
     server {
         listen       $P;
         server_name  www.reprobados.com;
-        location / { root /usr/share/nginx/html; index index.html; }
+        location / { root html; index index.html; }
     }
 }
-EOF
-            fi
-            Crear_Pagina "nginx" $P
-            systemctl start nginx
-            ;;
+"@
+            }
+            Set-Content $conf $cfg -Encoding ASCII
+            Crear-Pagina "nginx" $P
+            Start-Process "$nginxDir\nginx.exe" -WorkingDirectory $nginxDir -WindowStyle Hidden
+            Start-Sleep -Seconds 3
+        }
 
-        "apache")
-            local conf="/etc/httpd/conf.d/reprobados.conf"
-            local certAbs="/etc/ssl/reprobados/reprobados.crt"
-            local keyAbs="/etc/ssl/reprobados/reprobados.key"
+       "apache" {
+            $rutaApache = $null
+            $svcWmi = Get-CimInstance Win32_Service | Where-Object { $_.Name -like "Apache*" } | Select-Object -First 1
+            if ($svcWmi) {
+                if ($svcWmi.PathName -match '"([^"]+bin[^"]+httpd\.exe)"') { $rutaApache = Split-Path (Split-Path $matches[1] -Parent) -Parent }
+                elseif ($svcWmi.PathName -match '([A-Za-z]:[^ ]+httpd\.exe)') { $rutaApache = Split-Path (Split-Path $matches[1] -Parent) -Parent }
+            }
+            if (!$rutaApache) {
+                foreach ($c in @("C:\Apache24","$env:APPDATA\Apache24")) {
+                    if (Test-Path "$c\bin\httpd.exe") { $rutaApache = $c; break }
+                }
+            }
+            if (!$rutaApache) { Write-Host "[!] Apache no encontrado." -ForegroundColor Red; Pause; return }
+            
+            $conf    = "$rutaApache\conf\httpd.conf"
+            $webRoot = "$rutaApache\htdocs"
+            $certDir = "C:/ssl/reprobados"
+            $webDir  = $webRoot -replace '\\','/'
 
-            # Limpiar configs por defecto de apache para que no choquen
-            rm -f /etc/httpd/conf.d/ssl.conf 2>/dev/null
-            rm -f /etc/httpd/conf.d/welcome.conf 2>/dev/null
+            $lineas = Get-Content $conf
+            for ($i = 0; $i -lt $lineas.Count; $i++) {
+                if ($lineas[$i] -match '^<VirtualHost') { $lineas = $lineas[0..($i-1)]; break }
+            }
 
-            # Asegurarse de que escuche en los puertos necesarios
-            sed -i '/^Listen/d' /etc/httpd/conf/httpd.conf
-            echo "Listen $P" >> /etc/httpd/conf/httpd.conf
-            if [ "$usarSSL" = true ]; then
-                echo "Listen 80" >> /etc/httpd/conf/httpd.conf
-            fi
+            $lineas = $lineas | Where-Object { $_ -notmatch '^Listen ' }
+            $lineas = $lineas | ForEach-Object {
+                if ($_ -match '^#?ServerName ') { "ServerName www.reprobados.com:$P" }
+                elseif ($_ -match '^#LoadModule ssl_module') { "LoadModule ssl_module modules/mod_ssl.so" }
+                elseif ($_ -match '^#LoadModule socache_shmcb_module') { "LoadModule socache_shmcb_module modules/mod_socache_shmcb.so" }
+                elseif ($_ -match '^#LoadModule headers_module') { "LoadModule headers_module modules/mod_headers.so" }
+                else { $_ }
+            }
 
-            if [ "$usarSSL" = true ]; then
-                cat <<EOF > $conf
+            if ($usarSSL) { $lineas = @("Listen 80", "Listen $P") + $lineas }
+            else { $lineas = @("Listen $P") + $lineas }
+
+            if ($usarSSL -and (Test-Path "$certDir\reprobados.crt")) {
+                $vhost = @"
+
 <VirtualHost *:80>
     ServerName www.reprobados.com
     Redirect permanent / https://www.reprobados.com:$P/
@@ -214,240 +254,275 @@ EOF
 
 <VirtualHost *:$P>
     ServerName www.reprobados.com
-    DocumentRoot "/var/www/html"
+    DocumentRoot "$webDir"
     SSLEngine on
-    SSLCertificateFile    "$certAbs"
-    SSLCertificateKeyFile "$keyAbs"
+    SSLCertificateFile    "$certDir/reprobados.crt"
+    SSLCertificateKeyFile "$certDir/reprobados.key"
     Header always set Strict-Transport-Security "max-age=31536000"
+    <Directory "$webDir">
+        Options Indexes FollowSymLinks
+        AllowOverride None
+        Require all granted
+    </Directory>
 </VirtualHost>
-EOF
-            else
-                cat <<EOF > $conf
+"@
+            } else {
+                $vhost = @"
 <VirtualHost *:$P>
     ServerName www.reprobados.com
-    DocumentRoot "/var/www/html"
+    DocumentRoot "$webDir"
+    <Directory "$webDir">
+        Options Indexes FollowSymLinks
+        AllowOverride None
+        Require all granted
+    </Directory>
 </VirtualHost>
-EOF
-            fi
-            Crear_Pagina "apache" $P
-            systemctl start httpd
-            ;;
+"@
+            }
+            $lineas += ($vhost -split "`n")
+            Set-Content $conf $lineas -Encoding ASCII
 
-        "tomcat")
-            local conf="/etc/tomcat/server.xml"
-            local certAbs="/etc/ssl/reprobados/reprobados.crt"
-            local keyAbs="/etc/ssl/reprobados/reprobados.key"
+            $test = & "$rutaApache\bin\httpd.exe" -t 2>&1
+            if ($test -match "Syntax OK") {
+                Crear-Pagina "apache" $P
+                Restart-Service Apache* -Force -ErrorAction SilentlyContinue
+                Start-Sleep -Seconds 3
+            } else {
+                Write-Host "[!] Error en config de Apache:" -ForegroundColor Red
+                $test | Out-String | Write-Host -ForegroundColor Yellow
+                Pause; return
+            }
+        }
 
-            echo -e "${CYAN}[*] Configurando Tomcat...${NC}"
-            cp $conf "${conf}.backup" 2>/dev/null
+      "iis" {
+            Write-Host "[*] Configurando IIS en puerto $P..." -ForegroundColor Cyan
             
-            # Borrar conectores anteriores (limpieza sucia pero efectiva)
-            sed -i '/<Connector/d' $conf
-            sed -i '/<\/Connector>/d' $conf
-            sed -i '/certificateFile/d' $conf
-            sed -i '/SSLHostConfig/d' $conf
+            Get-Website | Stop-Website -ErrorAction SilentlyContinue
+            Remove-Website -Name "Default Web Site" -ErrorAction SilentlyContinue
+            Remove-Website -Name "SitioP7" -ErrorAction SilentlyContinue
 
-            if [ "$usarSSL" = true ]; then
-                # Inyectar el conector SSL justo antes de </Service>
-                sed -i "/<\/Service>/i \\
-    <Connector port=\"$P\" protocol=\"org.apache.coyote.http11.Http11NioProtocol\" maxThreads=\"150\" SSLEnabled=\"true\" scheme=\"https\" secure=\"true\" defaultSSLHostConfigName=\"www.reprobados.com\">\\
-        <SSLHostConfig hostName=\"www.reprobados.com\">\\
-            <Certificate certificateFile=\"$certAbs\" certificateKeyFile=\"$keyAbs\" />\\
-        </SSLHostConfig>\\
-    </Connector>" $conf
-            else
-                # Conector HTTP normal
-                sed -i "/<\/Service>/i \\
-    <Connector port=\"$P\" protocol=\"HTTP/1.1\" connectionTimeout=\"20000\" redirectPort=\"8443\" />" $conf
-            fi
+            $webRoot = "C:\Sitio_IIS_Limpio"
+            if (!(Test-Path $webRoot)) { New-Item $webRoot -ItemType Directory -Force | Out-Null }
+            
+            Crear-Pagina "iis" $P
 
-            Crear_Pagina "tomcat" $P
-            systemctl start tomcat
-            ;;
-    esac
+            if ($usarSSL -and $certObj) {
+                New-Website -Name "SitioP7" -Port 80 -PhysicalPath $webRoot -Force | Out-Null
+                Get-ChildItem -Path "IIS:\SslBindings" | Where-Object { $_.Port -eq $P } | Remove-Item -Force -ErrorAction SilentlyContinue
+                New-WebBinding -Name "SitioP7" -IPAddress "*" -Port $P -Protocol "https"
+                
+                $certObj | New-Item -Path "IIS:\SslBindings\*!$P" -Force | Out-Null
+                Write-Host "[OK] SSL vinculado al puerto $P" -ForegroundColor Green
+                
+            } else {
+                New-Website -Name "SitioP7" -Port $P -PhysicalPath $webRoot -Force | Out-Null
+            }
 
-    sleep 3
-    if ss -tuln | grep -q ":$P\b"; then
-        echo -e "${GREEN}[OK] $servicio ONLINE en puerto $P${NC}"
-    else
-        echo -e "${RED}[!] $servicio no pudo levantar en el puerto $P. Revisa los logs.${NC}"
-    fi
-    read -p "Presione Enter para continuar..."
+            New-NetFirewallRule -DisplayName "IIS_Port_$P" -Direction Inbound -LocalPort $P -Protocol TCP -Action Allow -ErrorAction SilentlyContinue
+            Restart-Service W3SVC -Force -ErrorAction SilentlyContinue
+            Write-Host "[*] Esperando a que IIS despierte..."
+            Start-Sleep -Seconds 5
+        }
+    }
+
+    if (Get-NetTCPConnection -LocalPort $P -State Listen -ErrorAction SilentlyContinue) {
+        Write-Host "[OK] $Servicio ONLINE en puerto $P" -ForegroundColor Green
+    } else {
+        Write-Host "[!] $Servicio no levanto en puerto $P" -ForegroundColor Red
+    }
+    Pause
 }
 
 # ================================================================
 # FTP E INSTALACION
 # ================================================================
-Instalar_Servicio() {
-    local servicio=$1
-    local paquete=$servicio
 
-    if [ "$servicio" == "apache" ]; then paquete="httpd mod_ssl"; fi
-    if [ "$servicio" == "tomcat" ]; then paquete="tomcat tomcat-webapps"; fi
+function Instalar-Servicio {
+    param($Servicio)
+    
+    $ServicioFTP = switch ($Servicio.ToLower()) {
+        "nginx"  { "Nginx" }
+        "apache" { "Apache" }
+        "iis"    { "IIS" }
+        default  { $Servicio }
+    }
+    $paquete = switch ($Servicio.ToLower()) {
+        "nginx"  { "nginx" }
+        "apache" { "apache-httpd" }
+        "iis"    { "iis" }
+    }
 
-    echo ""
-    echo -e "${CYAN}[I] --- Instalando: $servicio ---${NC}"
-    echo "1) DNF (Gestor Oficial) | 2) FTP ($FTP_IP)"
-    read -p "Elija origen: " origen
+    Write-Host ""; Write-Host "[I] --- Instalando: $Servicio ---" -ForegroundColor Blue
+    Write-Host "1) Chocolatey (Oficial) | 2) FTP ($global:FTP_IP)"
+    $origen = Read-Host "Elija origen"
 
-    if [ "$origen" == "1" ]; then
-        echo -e "${GRAY}[...] Instalando $paquete por DNF...${NC}"
-        dnf install -y $paquete >/dev/null 2>&1
-        echo -e "${GREEN}[OK] Instalacion completada.${NC}"
-    else
-        # Lógica FTP dinámica
-        local ftpDir="ftp://$FTP_IP/http/Linux/${servicio^}/"
-        echo -e "${CYAN}[*] Listando archivos en $ftpDir...${NC}"
-        
-        # Descarga lista de archivos (omitiendo los sha256)
-        archivos=$(curl -s -l -u "$FTP_USER:$FTP_PASS" "$ftpDir" | grep -v ".sha256" | tr -d '\r')
-        
-        if [ -z "$archivos" ]; then
-            echo -e "${RED}[!] No hay archivos o FTP no conectado.${NC}"
-            read -p "Enter para continuar..."
-            return
-        fi
-
-        IFS=$'\n' read -r -d '' -a arrArchivos <<< "$archivos"
-        for i in "${!arrArchivos[@]}"; do
-            echo "$((i+1))) ${arrArchivos[$i]}"
-        done
-
-        read -p "Seleccione el archivo: " idx
-        idx=$((idx-1))
-        archivo="${arrArchivos[$idx]}"
-
-        echo -e "${YELLOW}[*] Descargando $archivo...${NC}"
-        curl -s -u "$FTP_USER:$FTP_PASS" -o "/tmp/$archivo" "$ftpDir$archivo"
-        
-        # Validación Hash
-        echo -e "${YELLOW}[*] Validando integridad (Hash SHA256)...${NC}"
-        curl -s -u "$FTP_USER:$FTP_PASS" -o "/tmp/$archivo.sha256" "$ftpDir$archivo.sha256"
-        
-        if [ -f "/tmp/$archivo.sha256" ]; then
-            hashLocal=$(sha256sum "/tmp/$archivo" | awk '{print $1}' | tr 'a-z' 'A-Z')
-            hashServer=$(cat "/tmp/$archivo.sha256" | awk '{print $1}' | tr 'a-z' 'A-Z')
+    if ($origen -eq "1") {
+        if ($Servicio -eq "iis") {
+            $checkIIS = Get-WindowsFeature -Name Web-Server -ErrorAction SilentlyContinue
+            if ($checkIIS.Installed) {
+                Write-Host "[OK] IIS ya se encuentra instalado en el sistema." -ForegroundColor Green
+            } else {
+                Write-Host "[*] Instalando IIS y el modulo de FTP... (esto puede tardar unos minutos)" -ForegroundColor Cyan
+                Install-WindowsFeature -Name Web-Server, Web-Ftp-Server, Web-Ftp-Service, Web-Ftp-Ext -IncludeManagementTools
+                Write-Host "[OK] IIS instalado correctamente." -ForegroundColor Green
+            }
             
-            if [ "$hashLocal" != "$hashServer" ]; then
-                echo -e "${RED}[!] HASH INVALIDO. Archivo corrupto.${NC}"
-                read -p "Enter para continuar..."
+            $dep = Read-Host "Desplegar IIS ahora? [S/N]"
+            if ($dep -match '^[Ss]$') { Aplicar-Despliegue "iis" }
+            return
+        }
+        $chocoExe = Garantizar-Chocolatey
+        Limpiar-Entorno 80
+        & $chocoExe install $paquete -y | Out-Null
+        Write-Host "[OK] Instalacion completada." -ForegroundColor Green
+        
+    } else {
+        # === DESCARGA DESDE FTP IIS AISLADO ===
+        # La ruta DEBE empezar con LocalUser/Public por el UserIsolation de tu servidor IIS
+        $ftpRuta = "ftp://$($global:FTP_IP)/LocalUser/Public/general/http/Windows/$ServicioFTP"
+        
+        $archivo = switch ($Servicio.ToLower()) {
+            "nginx"  { "nginx.zip" }
+            "apache" { "apache_2.4.zip" }
+            "iis"    { "iis_installer.exe" }
+            default  { "$($Servicio.ToLower()).zip" }
+        }
+
+        $destLocal = Join-Path $env:TEMP $archivo
+        $hashFileLocal = Join-Path $env:TEMP "$archivo.sha256"
+
+        Write-Host "[*] Descargando $archivo desde FTP IIS ($ftpRuta)..." -ForegroundColor Cyan
+        
+        try {
+            # 1. Ignorar errores de certificados autofirmados
+            if (-not ([System.Management.Automation.PSTypeName]'TrustAllCertsPolicy').Type) {
+                add-type @"
+                    using System.Net;
+                    using System.Security.Cryptography.X509Certificates;
+                    public class TrustAllCertsPolicy : ICertificatePolicy {
+                        public bool CheckValidationResult(
+                            ServicePoint srvPoint, X509Certificate certificate,
+                            WebRequest request, int certificateProblem) {
+                            return true;
+                        }
+                    }
+"@
+            }
+            [System.Net.ServicePointManager]::CertificatePolicy = New-Object TrustAllCertsPolicy
+            
+            # 2. Credencial obligatoria: anonymous y password con arroba (IIS lo requiere asi)
+            $passSecure = ConvertTo-SecureString "anonymous@" -AsPlainText -Force
+            $cred = New-Object System.Management.Automation.PSCredential("anonymous", $passSecure)
+
+            # 3. Descargamos usando Invoke-WebRequest nativo
+            Invoke-WebRequest -Uri "$ftpRuta/$archivo" -OutFile $destLocal -Credential $cred -ErrorAction Stop
+            Invoke-WebRequest -Uri "$ftpRuta/$archivo.sha256" -OutFile $hashFileLocal -Credential $cred -ErrorAction Stop
+            
+            Write-Host "[*] Validando integridad (Get-FileHash)..." -ForegroundColor Yellow
+            
+            $hashCalculado = (Get-FileHash -Path $destLocal -Algorithm SHA256).Hash
+            $hashEsperado = (Get-Content $hashFileLocal).Trim().ToUpper()
+
+            if ($hashCalculado -ne $hashEsperado) {
+                Write-Host "[!] HASH INVALIDO. Archivo corrupto." -ForegroundColor Red
+                Pause
                 return
-            fi
-            echo -e "${GREEN}[OK] Hash verificado correctamente.${NC}"
-        fi
+            }
+            Write-Host "[OK] Hash verificado correctamente." -ForegroundColor Green
 
-        # Instalar localmente según la extensión
-        if [[ "$archivo" == *.rpm ]]; then
-            dnf install -y "/tmp/$archivo" >/dev/null 2>&1
-        elif [[ "$archivo" == *.tar.gz ]]; then
-            tar -xzf "/tmp/$archivo" -C "/opt/"
-            echo -e "${GREEN}[OK] Extraído en /opt/${NC}"
-        fi
-    fi
+            if ($archivo -like "*.zip") {
+                $dest = "C:\tools\$Servicio"
+                if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
+                Expand-Archive -Path $destLocal -DestinationPath $dest -Force
+            } elseif ($archivo -like "*.msi" -or $archivo -like "*.exe") {
+                Start-Process msiexec.exe -ArgumentList "/i `"$destLocal`" /quiet" -Wait
+            }
+        } catch {
+            Write-Host "[!] Error descargando archivo desde FTP: $_" -ForegroundColor Red
+            Pause
+            return
+        }
+    }
 
-    read -p "¿Desplegar ahora? [S/N]: " dep
-    if [[ "$dep" =~ ^[Ss]$ ]]; then
-        Aplicar_Despliegue "$servicio"
-    fi
+    $dep = Read-Host "Desplegar ahora? [S/N]"
+    if ($dep -match '^[Ss]$') { Aplicar-Despliegue $Servicio }
 }
 
 # ================================================================
-# FTP SEGURO E INICIALIZACION (VSFTPD)
+# UTILIDADES GLOBALES
 # ================================================================
-Configurar_FTP_Seguro() {
-    echo -e "${CYAN}[*] Configurando vsftpd seguro (TLS)...${NC}"
-    dnf install -y vsftpd >/dev/null 2>&1
-    
-    Generar_Certificado_SSL
-    local crt="/etc/ssl/reprobados/reprobados.crt"
-    local key="/etc/ssl/reprobados/reprobados.key"
 
-    local conf="/etc/vsftpd/vsftpd.conf"
-    
-    # Limpiar lineas SSL previas si existen
-    sed -i '/ssl_enable/d' $conf
-    sed -i '/allow_anon_ssl/d' $conf
-    sed -i '/force_local_data_ssl/d' $conf
-    sed -i '/force_local_logins_ssl/d' $conf
-    sed -i '/ssl_tlsv1/d' $conf
-    sed -i '/rsa_cert_file/d' $conf
-    sed -i '/rsa_private_key_file/d' $conf
+function Validar-Puerto-Seguro {
+    while ($true) {
+        $nuevo = Read-Host "Ingrese el puerto (recomendado: 8080, 8443, 9090)"
+        if (-not ($nuevo -match '^\d+$') -or [int]$nuevo -lt 1 -or [int]$nuevo -gt 65535) { continue }
+        $global:PUERTO_ACTUAL = $nuevo
+        Write-Host "[OK] Puerto $nuevo asignado." -ForegroundColor Green
+        return
+    }
+}
 
-    # Agregar configuracion TLS
-    cat <<EOF >> $conf
+function Mostrar-Resumen {
+    Write-Host "`n============================================================" -ForegroundColor Cyan
+    Write-Host "   RESUMEN DE INFRAESTRUCTURA" -ForegroundColor Cyan
+    Write-Host "============================================================" -ForegroundColor Cyan
+    Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | 
+        Where-Object { $_.LocalPort -in @(80,443,21,8080,8081,8082,8443,9090,$global:PUERTO_ACTUAL) } |
+        Select-Object LocalAddress, LocalPort | Sort-Object LocalPort | Format-Table -AutoSize
+    Pause
+}
 
-# --- Configuracion SSL/TLS Inyectada ---
-ssl_enable=YES
-allow_anon_ssl=YES
-force_local_data_ssl=YES
-force_local_logins_ssl=YES
-ssl_tlsv1=YES
-rsa_cert_file=$crt
-rsa_private_key_file=$key
-require_ssl_reuse=NO
-EOF
-
-    Abrir_Firewall 21
-    systemctl restart vsftpd
-    systemctl enable vsftpd >/dev/null 2>&1
-
-    sleep 2
-    if ss -tuln | grep -q ":21\b"; then
-        echo -e "${GREEN}[OK] FTP (vsftpd) ONLINE en puerto 21 con TLS activado.${NC}"
-    else
-        echo -e "${RED}[!] FTP no levanto. Revisa /etc/vsftpd/vsftpd.conf${NC}"
-    fi
-    read -p "Presione Enter para continuar..."
+function Mostrar-Arbol-FTP {
+    Write-Host "`n============================================================" -ForegroundColor Yellow
+    Write-Host "   ESTRUCTURA DEL DIRECTORIO FTP (C:\inetpub\ftproot\general)" -ForegroundColor Yellow
+    Write-Host "============================================================" -ForegroundColor Yellow
+    if (Test-Path "C:\inetpub\ftproot\general") {
+        cmd.exe /c "tree C:\inetpub\ftproot\general /F /A"
+    } else {
+        Write-Host "[!] El directorio C:\inetpub\ftproot\general aun no existe." -ForegroundColor Red
+        Write-Host "    Asegurate de haber configurado tu FTP primero." -ForegroundColor Yellow
+    }
+    Pause
 }
 
 # ================================================================
 # MENU PRINCIPAL
 # ================================================================
-Menu_Principal() {
-    # Definir variables de FTP (apuntando a tu maquina de Windows si la tienes en la red)
-    export FTP_IP="192.168.56.1" # Cambia esto por la IP de tu servidor FTP si es otra
-    export FTP_USER="anonymous"
-    export FTP_PASS=""
 
-    while true; do
-        clear
-        echo -e "${CYAN}====================================================${NC}"
-        echo -e "${CYAN}      MODULO HTTP/FTP - LINUX (FEDORA SERVER)       ${NC}"
-        echo -e "${YELLOW}      PUERTO CONFIGURADO: $PUERTO_ACTUAL             ${NC}"
-        echo -e "${CYAN}====================================================${NC}"
-        echo " 1) Instalar + Desplegar Nginx"
-        echo " 2) Instalar + Desplegar Apache"
-        echo " 3) Instalar + Desplegar Tomcat"
-        echo " 4) Configurar FTP Seguro (vsftpd TLS)"
-        echo " 5) Configurar Puerto por Defecto"
-        echo "----------------------------------------------------"
-        echo " 6) Mostrar Resumen de Puertos (Netstat)"
-        echo " 7) Salir"
-        echo -e "${CYAN}====================================================${NC}"
-        read -p " Opcion: " opcion
+function Menu-FTP-HTTP {
+    # Sacamos la IP automaticamente
+    $global:FTP_IP   = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceAlias -notlike "*Loopback*" -and $_.IPAddress -notlike "169.*" } | Select-Object -First 1).IPAddress
+    if (!$global:FTP_IP) { $global:FTP_IP = "192.168.56.10" }
 
-        case $opcion in
-            1) Instalar_Servicio "nginx" ;;
-            2) Instalar_Servicio "apache" ;;
-            3) Instalar_Servicio "tomcat" ;;
-            4) Configurar_FTP_Seguro ;;
-            5) 
-                read -p "Ingrese el puerto (recomendado: 8080, 8443, 9090): " nuevo
-                if [[ "$nuevo" =~ ^[0-9]+$ ]]; then
-                    PUERTO_ACTUAL=$nuevo
-                    echo -e "${GREEN}[OK] Puerto $nuevo asignado.${NC}"
-                fi
-                sleep 1
-                ;;
-            6) 
-                echo -e "\n${CYAN}--- Puertos a la escucha ---${NC}"
-                ss -tuln | grep -E ':(80|443|21|8080|8081|8082|8443|9090)'
-                read -p "Enter para continuar..."
-                ;;
-            7) exit 0 ;;
-            *) echo -e "${RED}Opcion invalida${NC}"; sleep 1 ;;
-        esac
-    done
+    while ($true) {
+        $p = if ($global:PUERTO_ACTUAL -and $global:PUERTO_ACTUAL -ne "N/A") { $global:PUERTO_ACTUAL } else { "N/A" }
+        Write-Host ""
+        Write-Host "====================================================" -ForegroundColor Cyan
+        Write-Host "      MODULO HTTP/FTP - IP: $global:FTP_IP" -ForegroundColor Cyan
+        Write-Host "      PUERTO CONFIGURADO: $p" -ForegroundColor Yellow
+        Write-Host "====================================================" -ForegroundColor Cyan
+        Write-Host " 1) Instalar + Desplegar Nginx"
+        Write-Host " 2) Instalar + Desplegar Apache"
+        Write-Host " 3) Instalar + Desplegar IIS (HTTP)"
+        Write-Host " 4) Configurar Puerto"
+        Write-Host "----------------------------------------------------"
+        Write-Host " 5) Mostrar Resumen de Puertos"
+        Write-Host " 6) Mostrar Arbol del Directorio FTP"
+        Write-Host " 7) Salir"
+        Write-Host "===================================================="
+        $opcion = Read-Host " Opcion"
+
+        switch ($opcion) {
+            "1" { Instalar-Servicio "nginx"  }
+            "2" { Instalar-Servicio "apache" }
+            "3" { Instalar-Servicio "iis"    }
+            "4" { Validar-Puerto-Seguro  }
+            "5" { Mostrar-Resumen }
+            "6" { Mostrar-Arbol-FTP }
+            "7" { return }
+            default { Write-Host "Invalido" -ForegroundColor Red }
+        }
+    }
 }
 
-Menu_Principal
+Menu-FTP-HTTP
