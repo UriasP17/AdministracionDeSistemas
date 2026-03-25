@@ -10,7 +10,7 @@ $PUERTOS_BLOQUEADOS = @(1,7,9,11,13,15,17,19,20,21,22,23,25,37,42,43,53,69,77,79
     2049,3659,4045,6000,6665,6666,6667,6668,6669,6697)
 
 # ================================================================
-# LIMPIEZA Y PAGINA
+# LIMPIEZA Y PAGINA (SOLO NGINX E IIS)
 # ================================================================
 
 function Garantizar-Chocolatey {
@@ -41,7 +41,6 @@ function Crear-Pagina {
     
     $paths = @{
         "nginx"  = "C:\tools\nginx-1.29.6\html\index.html"
-        "apache" = "C:\Users\vboxuser\AppData\Roaming\Apache24\htdocs\index.html"
         "iis"    = "C:\Sitio_IIS_Limpio\index.html"
     }
     
@@ -52,10 +51,7 @@ function Crear-Pagina {
     if (!(Test-Path $dir)) { New-Item $dir -ItemType Directory -Force | Out-Null }
     
     $color = "#009688"
-    $msg   = "Servicio Activo"
-    
-    if ($servicio -eq "apache") { $color = "#D32F2F" }
-    if ($servicio -eq "iis")    { $color = "#0288D1" }
+    if ($servicio -eq "iis") { $color = "#0288D1" }
 
     $servidorNombre = $servicio.ToUpper()
 
@@ -78,7 +74,7 @@ function Crear-Pagina {
 <div class="wrap">
   <div class="dot"></div>
   <h1>$servidorNombre</h1>
-  <div class="badge">$msg</div>
+  <div class="badge">Servicio Activo</div>
   <div class="meta">www.reprobados.com - Puerto: $puerto</div>
 </div>
 </body>
@@ -210,29 +206,53 @@ http {
 
        "apache" {
             $rutaApache = $null
-            $svcWmi = Get-CimInstance Win32_Service | Where-Object { $_.Name -like "Apache*" } | Select-Object -First 1
+            $svcWmi = Get-CimInstance Win32_Service | Where-Object { $_.Name -like "Apache*" -or $_.PathName -like "*httpd.exe*" } | Select-Object -First 1
             if ($svcWmi) {
-                if ($svcWmi.PathName -match '"([^"]+bin[^"]+httpd\.exe)"') { $rutaApache = Split-Path (Split-Path $matches[1] -Parent) -Parent }
-                elseif ($svcWmi.PathName -match '([A-Za-z]:[^ ]+httpd\.exe)') { $rutaApache = Split-Path (Split-Path $matches[1] -Parent) -Parent }
+                $rutaEjecutable = $svcWmi.PathName.Split('"')[1]
+                if (-not $rutaEjecutable) { $rutaEjecutable = $svcWmi.PathName.Split(' ')[0] }
+                $rutaApache = Split-Path (Split-Path $rutaEjecutable -Parent) -Parent
             }
-            if (!$rutaApache) {
-                foreach ($c in @("C:\Apache24","$env:APPDATA\Apache24")) {
-                    if (Test-Path "$c\bin\httpd.exe") { $rutaApache = $c; break }
-                }
-            }
-            if (!$rutaApache) { Write-Host "[!] Apache no encontrado." -ForegroundColor Red; Pause; return }
             
-            $conf    = "$rutaApache\conf\httpd.conf"
-            $webRoot = "$rutaApache\htdocs"
-            $certDir = "C:/ssl/reprobados"
-            $webDir  = $webRoot -replace '\\','/'
-
-            $lineas = Get-Content $conf
-            for ($i = 0; $i -lt $lineas.Count; $i++) {
-                if ($lineas[$i] -match '^<VirtualHost') { $lineas = $lineas[0..($i-1)]; break }
+            if (!$rutaApache -or !(Test-Path "$rutaApache\conf\httpd.conf")) { 
+                Write-Host "[!] Apache no encontrado o httpd.conf perdido." -ForegroundColor Red; Pause; return 
             }
+            
+            $conf = "$rutaApache\conf\httpd.conf"
+            $certDir = "C:/ssl/reprobados"
+            
+            # --- CREAR SITIO AISLADO ---
+            $webRootNuevo = "C:\Sitio_Apache_Limpio"
+            if (!(Test-Path $webRootNuevo)) { New-Item $webRootNuevo -ItemType Directory -Force | Out-Null }
+            $webDir = $webRootNuevo -replace '\\','/'
 
-            $lineas = $lineas | Where-Object { $_ -notmatch '^Listen ' }
+            $html = @"
+<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>APACHE</title><style>
+body { margin: 0; font-family: sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; background: #fafafa; color: #111; }
+.wrap { text-align: center; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: #D32F2F; display: inline-block; margin-bottom: 2rem; }
+h1 { font-size: 1.6rem; font-weight: 600; margin: 0 0 .4rem; }
+.badge { display: inline-block; margin: 1.2rem 0; padding: .3rem .9rem; border: 1.5px solid #D32F2F; color: #D32F2F; font-size: .85rem; border-radius: 99px; }
+.meta { font-size: .85rem; color: #777; margin-top: .5rem; }
+</style></head><body><div class="wrap"><div class="dot"></div><h1>APACHE</h1><div class="badge">Servicio Activo</div><div class="meta">www.reprobados.com - Puerto: $P</div></div></body></html>
+"@
+            Set-Content -Path "$webRootNuevo\index.html" -Value $html -Encoding UTF8 -Force
+
+            # --- LIMPIAR BASURA DE APACHE HAUS AUTOMATICAMENTE ---
+            $confExtra = "$rutaApache\conf\extra\httpd-vhosts.conf"
+            if (Test-Path $confExtra) { Clear-Content -Path $confExtra -Force -ErrorAction SilentlyContinue }
+
+            # --- PARCHEAR HTTPD.CONF ---
+            $lineas = Get-Content $conf
+            $lineasCorregidas = @()
+            for ($i = 0; $i -lt $lineas.Count; $i++) {
+                if ($lineas[$i] -match '^<VirtualHost') { break }
+                if ($lineas[$i] -match '^Include conf/extra/httpd-vhosts.conf') { $lineasCorregidas += "#Include conf/extra/httpd-vhosts.conf" }
+                elseif ($lineas[$i] -match '^DocumentRoot ') { $lineasCorregidas += "DocumentRoot `"$webDir`"" }
+                elseif ($lineas[$i] -match '^<Directory ".*htdocs">') { $lineasCorregidas += "<Directory `"$webDir`">" }
+                elseif ($lineas[$i] -notmatch '^Listen ') { $lineasCorregidas += $lineas[$i] }
+            }
+            $lineas = $lineasCorregidas
+
             $lineas = $lineas | ForEach-Object {
                 if ($_ -match '^#?ServerName ') { "ServerName www.reprobados.com:$P" }
                 elseif ($_ -match '^#LoadModule ssl_module') { "LoadModule ssl_module modules/mod_ssl.so" }
@@ -284,7 +304,6 @@ http {
 
             $test = & "$rutaApache\bin\httpd.exe" -t 2>&1
             if ($test -match "Syntax OK") {
-                Crear-Pagina "apache" $P
                 Restart-Service Apache* -Force -ErrorAction SilentlyContinue
                 Start-Sleep -Seconds 3
             } else {
@@ -378,7 +397,6 @@ function Instalar-Servicio {
         
     } else {
         # === DESCARGA DESDE FTP IIS AISLADO ===
-        # La ruta DEBE empezar con LocalUser/Public por el UserIsolation de tu servidor IIS
         $ftpRuta = "ftp://$($global:FTP_IP)/LocalUser/Public/general/http/Windows/$ServicioFTP"
         
         $archivo = switch ($Servicio.ToLower()) {
@@ -394,7 +412,6 @@ function Instalar-Servicio {
         Write-Host "[*] Descargando $archivo desde FTP IIS ($ftpRuta)..." -ForegroundColor Cyan
         
         try {
-            # 1. Ignorar errores de certificados autofirmados
             if (-not ([System.Management.Automation.PSTypeName]'TrustAllCertsPolicy').Type) {
                 add-type @"
                     using System.Net;
@@ -410,11 +427,9 @@ function Instalar-Servicio {
             }
             [System.Net.ServicePointManager]::CertificatePolicy = New-Object TrustAllCertsPolicy
             
-            # 2. Credencial obligatoria: anonymous y password con arroba (IIS lo requiere asi)
             $passSecure = ConvertTo-SecureString "anonymous@" -AsPlainText -Force
             $cred = New-Object System.Management.Automation.PSCredential("anonymous", $passSecure)
 
-            # 3. Descargamos usando Invoke-WebRequest nativo
             Invoke-WebRequest -Uri "$ftpRuta/$archivo" -OutFile $destLocal -Credential $cred -ErrorAction Stop
             Invoke-WebRequest -Uri "$ftpRuta/$archivo.sha256" -OutFile $hashFileLocal -Credential $cred -ErrorAction Stop
             
@@ -449,14 +464,8 @@ function Instalar-Servicio {
 }
 
 # ================================================================
-# FTP SEGURO E INICIALIZACION
+# UTILIDADES GLOBALES
 # ================================================================
-
-function Configurar-FTP-Seguro {
-    Write-Host "[!] Nota: Esta configuracion ahora se maneja en tu script IIS separado." -ForegroundColor Yellow
-    Write-Host "    Asegurate de haber corrido la Opcion 1 de tu script de Administrador FTP." -ForegroundColor Yellow
-    Pause
-}
 
 function Validar-Puerto-Seguro {
     while ($true) {
@@ -486,7 +495,7 @@ function Mostrar-Arbol-FTP {
         cmd.exe /c "tree C:\inetpub\ftproot\general /F /A"
     } else {
         Write-Host "[!] El directorio C:\inetpub\ftproot\general aun no existe." -ForegroundColor Red
-        Write-Host "    Corre el script de IIS del profe primero." -ForegroundColor Yellow
+        Write-Host "    Asegurate de haber configurado tu FTP primero." -ForegroundColor Yellow
     }
     Pause
 }
@@ -496,7 +505,6 @@ function Mostrar-Arbol-FTP {
 # ================================================================
 
 function Menu-FTP-HTTP {
-    # Sacamos la IP automaticamente
     $global:FTP_IP   = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceAlias -notlike "*Loopback*" -and $_.IPAddress -notlike "169.*" } | Select-Object -First 1).IPAddress
     if (!$global:FTP_IP) { $global:FTP_IP = "192.168.56.10" }
 
@@ -510,12 +518,11 @@ function Menu-FTP-HTTP {
         Write-Host " 1) Instalar + Desplegar Nginx"
         Write-Host " 2) Instalar + Desplegar Apache"
         Write-Host " 3) Instalar + Desplegar IIS (HTTP)"
-        Write-Host " 4) Configurar FTP Seguro (Aviso)"
-        Write-Host " 5) Configurar Puerto"
+        Write-Host " 4) Configurar Puerto"
         Write-Host "----------------------------------------------------"
-        Write-Host " 6) Mostrar Resumen de Puertos"
-        Write-Host " 7) Mostrar Arbol del Directorio FTP"
-        Write-Host " 8) Salir"
+        Write-Host " 5) Mostrar Resumen de Puertos"
+        Write-Host " 6) Mostrar Arbol del Directorio FTP"
+        Write-Host " 7) Salir"
         Write-Host "===================================================="
         $opcion = Read-Host " Opcion"
 
@@ -523,11 +530,10 @@ function Menu-FTP-HTTP {
             "1" { Instalar-Servicio "nginx"  }
             "2" { Instalar-Servicio "apache" }
             "3" { Instalar-Servicio "iis"    }
-            "4" { Configurar-FTP-Seguro }
-            "5" { Validar-Puerto-Seguro }
-            "6" { Mostrar-Resumen }
-            "7" { Mostrar-Arbol-FTP }
-            "8" { return }
+            "4" { Validar-Puerto-Seguro  }
+            "5" { Mostrar-Resumen }
+            "6" { Mostrar-Arbol-FTP }
+            "7" { return }
             default { Write-Host "Invalido" -ForegroundColor Red }
         }
     }
