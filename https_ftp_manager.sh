@@ -238,30 +238,89 @@ EOF
             local certAbs="/etc/ssl/reprobados/reprobados.crt"
             local keyAbs="/etc/ssl/reprobados/reprobados.key"
 
-            echo -e "${CYAN}[*] Configurando Tomcat...${NC}"
-            cp $conf "${conf}.backup" 2>/dev/null
+            echo -e "${CYAN}[*] Configurando Tomcat (Reconstruyendo server.xml)...${NC}"
             
-            # Borrar conectores anteriores de forma segura
-            sed -i '/<Connector/d' $conf
-            sed -i '/<SSLHostConfig/d' $conf
-            sed -i '/<Certificate/d' $conf
-            sed -i '/<\/SSLHostConfig>/d' $conf
-            sed -i '/<\/Connector>/d' $conf
-
-            if [ "$usarSSL" = true ]; then
-                # Inyeccion de linea unica para SSL (Evita errores de sintaxis XML en Bash)
-                sed -i "/<\/Service>/i <Connector port=\"$P\" protocol=\"org.apache.coyote.http11.Http11NioProtocol\" maxThreads=\"150\" SSLEnabled=\"true\" scheme=\"https\" secure=\"true\" defaultSSLHostConfigName=\"_default_\"><SSLHostConfig hostName=\"_default_\"><Certificate certificateFile=\"$certAbs\" certificateKeyFile=\"$keyAbs\" type=\"RSA\" /></SSLHostConfig></Connector>" $conf
-            else
-                # Conector HTTP normal
-                sed -i "/<\/Service>/i <Connector port=\"$P\" protocol=\"HTTP/1.1\" connectionTimeout=\"20000\" redirectPort=\"8443\" />" $conf
+            # Respaldo de seguridad del original
+            if [ ! -f "${conf}.backup" ]; then
+                cp $conf "${conf}.backup" 2>/dev/null
             fi
 
             # Permisos cruciales para que Tomcat lea los certificados
             chown -R tomcat:tomcat /etc/ssl/reprobados/ 2>/dev/null
-            chmod 755 /etc/ssl/reprobados/* 2>/dev/null
+            chmod 755 /etc/ssl/reprobados/ 2>/dev/null
+            chmod 644 /etc/ssl/reprobados/* 2>/dev/null
+
+            # Escribir el server.xml limpio desde cero para evitar errores de sintaxis sed/XML
+            if [ "$usarSSL" = true ]; then
+                cat <<EOF > $conf
+<?xml version="1.0" encoding="UTF-8"?>
+<Server port="8005" shutdown="SHUTDOWN">
+  <Listener className="org.apache.catalina.startup.VersionLoggerListener" />
+  <Listener className="org.apache.catalina.core.AprLifecycleListener" SSLEngine="on" />
+  <Listener className="org.apache.catalina.core.JreMemoryLeakPreventionListener" />
+  <Listener className="org.apache.catalina.mbeans.GlobalResourcesLifecycleListener" />
+  <Listener className="org.apache.catalina.core.ThreadLocalLeakPreventionListener" />
+  <GlobalNamingResources>
+    <Resource name="UserDatabase" auth="Container" type="org.apache.catalina.UserDatabase" description="User database that can be updated and saved" factory="org.apache.catalina.users.MemoryUserDatabaseFactory" pathname="tomcat-users.xml" />
+  </GlobalNamingResources>
+  <Service name="Catalina">
+    <!-- Conector SSL Principal -->
+    <Connector port="$P" protocol="org.apache.coyote.http11.Http11NioProtocol"
+               maxThreads="150" SSLEnabled="true" defaultSSLHostConfigName="_default_">
+        <SSLHostConfig hostName="_default_">
+            <Certificate certificateFile="$certAbs"
+                         certificateKeyFile="$keyAbs"
+                         type="RSA" />
+        </SSLHostConfig>
+    </Connector>
+    <!-- Conector HTTP de respaldo -->
+    <Connector port="8080" protocol="HTTP/1.1" connectionTimeout="20000" redirectPort="$P" />
+    <Engine name="Catalina" defaultHost="localhost">
+      <Realm className="org.apache.catalina.realm.LockOutRealm">
+        <Realm className="org.apache.catalina.realm.UserDatabaseRealm" resourceName="UserDatabase"/>
+      </Realm>
+      <Host name="localhost" appBase="webapps" unpackWARs="true" autoDeploy="true">
+        <Valve className="org.apache.catalina.valves.AccessLogValve" directory="logs" prefix="localhost_access_log" suffix=".txt" pattern="%h %l %u %t &quot;%r&quot; %s %b" />
+      </Host>
+    </Engine>
+  </Service>
+</Server>
+EOF
+            else
+                cat <<EOF > $conf
+<?xml version="1.0" encoding="UTF-8"?>
+<Server port="8005" shutdown="SHUTDOWN">
+  <Listener className="org.apache.catalina.startup.VersionLoggerListener" />
+  <Listener className="org.apache.catalina.core.AprLifecycleListener" SSLEngine="on" />
+  <Listener className="org.apache.catalina.core.JreMemoryLeakPreventionListener" />
+  <Listener className="org.apache.catalina.mbeans.GlobalResourcesLifecycleListener" />
+  <Listener className="org.apache.catalina.core.ThreadLocalLeakPreventionListener" />
+  <GlobalNamingResources>
+    <Resource name="UserDatabase" auth="Container" type="org.apache.catalina.UserDatabase" description="User database that can be updated and saved" factory="org.apache.catalina.users.MemoryUserDatabaseFactory" pathname="tomcat-users.xml" />
+  </GlobalNamingResources>
+  <Service name="Catalina">
+    <!-- Conector HTTP Principal -->
+    <Connector port="$P" protocol="HTTP/1.1" connectionTimeout="20000" redirectPort="8443" />
+    <Engine name="Catalina" defaultHost="localhost">
+      <Realm className="org.apache.catalina.realm.LockOutRealm">
+        <Realm className="org.apache.catalina.realm.UserDatabaseRealm" resourceName="UserDatabase"/>
+      </Realm>
+      <Host name="localhost" appBase="webapps" unpackWARs="true" autoDeploy="true">
+        <Valve className="org.apache.catalina.valves.AccessLogValve" directory="logs" prefix="localhost_access_log" suffix=".txt" pattern="%h %l %u %t &quot;%r&quot; %s %b" />
+      </Host>
+    </Engine>
+  </Service>
+</Server>
+EOF
+            fi
+
+            # Asegurar permisos del nuevo server.xml
+            chown root:tomcat $conf
+            chmod 640 $conf
 
             Crear_Pagina "tomcat" $P
-            systemctl start tomcat
+            systemctl daemon-reload
+            systemctl restart tomcat
             ;;
     esac
 
