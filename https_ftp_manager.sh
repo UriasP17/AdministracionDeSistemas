@@ -12,13 +12,12 @@ PUERTOS_BLOQUEADOS=(1 7 9 11 13 15 17 19 20 21 22 23 25 37 42 43 53 69 77 79 87 
 
 PUERTO_ACTUAL="N/A"
 
-
 if [ "$EUID" -ne 0 ]; then
   echo -e "${RED}[!] Por favor ejecuta este script como root (sudo su).${NC}"
   exit
 fi
 
-# Deshabilitar SELinux temporalmente para evitar problemas de permisos con puertos custom y certificados
+# Deshabilitar SELinux temporalmente para evitar problemas de permisos
 setenforce 0 2>/dev/null
 echo -e "${GRAY}[*] SELinux ajustado a Permissive para la practica.${NC}"
 
@@ -47,15 +46,15 @@ Crear_Pagina() {
         color="#D32F2F" # Rojo
     elif [ "$servicio" == "tomcat" ]; then
         mkdir -p /var/lib/tomcat/webapps/ROOT 2>/dev/null
-        path="/var/lib/tomcat/webapps/ROOT/index.html"
+        path="/var/lib/tomcat/webapps/ROOT/index.jsp"
         color="#F57C00" # Naranja para Tomcat
     fi
 
     mkdir -p "$(dirname "$path")" 2>/dev/null
     local servNombre=${servicio^^}
 
-    # HTML Modificado: Texto ASCII limpio para evitar símbolos raros en los navegadores
     cat <<EOF > "$path"
+<%@ page language="java" contentType="text/html; charset=UTF-8" pageEncoding="UTF-8"%>
 <!DOCTYPE html>
 <html lang="es">
 <head>
@@ -80,6 +79,10 @@ Crear_Pagina() {
 </body>
 </html>
 EOF
+
+    if [ "$servicio" == "tomcat" ]; then
+        chown -R tomcat:tomcat /var/lib/tomcat/webapps/ROOT 2>/dev/null
+    fi
 }
 
 # ================================================================
@@ -100,7 +103,6 @@ Generar_Certificado_SSL() {
     echo -e "${CYAN}[*] Generando certificado SSL con OpenSSL...${NC}"
     openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout $key -out $crt -subj "/C=MX/ST=Sinaloa/L=LosMochis/O=Reprobados/CN=www.reprobados.com" 2>/dev/null
     
-    # Darle permisos para que otros servicios (como Tomcat) lo puedan leer
     chmod 644 $crt
     chmod 644 $key
 
@@ -194,11 +196,9 @@ EOF
             local certAbs="/etc/ssl/reprobados/reprobados.crt"
             local keyAbs="/etc/ssl/reprobados/reprobados.key"
 
-            # Limpiar configs por defecto de apache para que no choquen
             rm -f /etc/httpd/conf.d/ssl.conf 2>/dev/null
             rm -f /etc/httpd/conf.d/welcome.conf 2>/dev/null
 
-            # Asegurarse de que escuche en los puertos necesarios
             sed -i '/^Listen/d' /etc/httpd/conf/httpd.conf
             echo "Listen $P" >> /etc/httpd/conf/httpd.conf
             if [ "$usarSSL" = true ]; then
@@ -241,25 +241,24 @@ EOF
             echo -e "${CYAN}[*] Configurando Tomcat...${NC}"
             cp $conf "${conf}.backup" 2>/dev/null
             
-            # Borrar conectores anteriores (limpieza sucia pero efectiva)
+            # Borrar conectores anteriores de forma segura
             sed -i '/<Connector/d' $conf
+            sed -i '/<SSLHostConfig/d' $conf
+            sed -i '/<Certificate/d' $conf
+            sed -i '/<\/SSLHostConfig>/d' $conf
             sed -i '/<\/Connector>/d' $conf
-            sed -i '/certificateFile/d' $conf
-            sed -i '/SSLHostConfig/d' $conf
 
             if [ "$usarSSL" = true ]; then
-                # Inyectar el conector SSL justo antes de </Service>
-                sed -i "/<\/Service>/i \\
-    <Connector port=\"$P\" protocol=\"org.apache.coyote.http11.Http11NioProtocol\" maxThreads=\"150\" SSLEnabled=\"true\" scheme=\"https\" secure=\"true\" defaultSSLHostConfigName=\"www.reprobados.com\">\\
-        <SSLHostConfig hostName=\"www.reprobados.com\">\\
-            <Certificate certificateFile=\"$certAbs\" certificateKeyFile=\"$keyAbs\" />\\
-        </SSLHostConfig>\\
-    </Connector>" $conf
+                # Inyeccion de linea unica para SSL (Evita errores de sintaxis XML en Bash)
+                sed -i "/<\/Service>/i <Connector port=\"$P\" protocol=\"org.apache.coyote.http11.Http11NioProtocol\" maxThreads=\"150\" SSLEnabled=\"true\" scheme=\"https\" secure=\"true\" defaultSSLHostConfigName=\"_default_\"><SSLHostConfig hostName=\"_default_\"><Certificate certificateFile=\"$certAbs\" certificateKeyFile=\"$keyAbs\" type=\"RSA\" /></SSLHostConfig></Connector>" $conf
             else
                 # Conector HTTP normal
-                sed -i "/<\/Service>/i \\
-    <Connector port=\"$P\" protocol=\"HTTP/1.1\" connectionTimeout=\"20000\" redirectPort=\"8443\" />" $conf
+                sed -i "/<\/Service>/i <Connector port=\"$P\" protocol=\"HTTP/1.1\" connectionTimeout=\"20000\" redirectPort=\"8443\" />" $conf
             fi
+
+            # Permisos cruciales para que Tomcat lea los certificados
+            chown -R tomcat:tomcat /etc/ssl/reprobados/ 2>/dev/null
+            chmod 755 /etc/ssl/reprobados/* 2>/dev/null
 
             Crear_Pagina "tomcat" $P
             systemctl start tomcat
@@ -271,6 +270,9 @@ EOF
         echo -e "${GREEN}[OK] $servicio ONLINE en puerto $P${NC}"
     else
         echo -e "${RED}[!] $servicio no pudo levantar en el puerto $P. Revisa los logs.${NC}"
+        if [ "$servicio" == "tomcat" ]; then
+            echo -e "${YELLOW}Ejecuta: journalctl -u tomcat.service -e${NC}"
+        fi
     fi
     read -p "Presione Enter para continuar..."
 }
@@ -299,7 +301,6 @@ Instalar_Servicio() {
         local ftpDir="ftp://$FTP_IP/http/Linux/${servicio^}/"
         echo -e "${CYAN}[*] Listando archivos en $ftpDir...${NC}"
         
-        # Descarga lista de archivos (omitiendo los sha256)
         archivos=$(curl -s -l -u "$FTP_USER:$FTP_PASS" "$ftpDir" | grep -v ".sha256" | tr -d '\r')
         
         if [ -z "$archivos" ]; then
@@ -336,7 +337,7 @@ Instalar_Servicio() {
             echo -e "${GREEN}[OK] Hash verificado correctamente.${NC}"
         fi
 
-        # Instalar localmente según la extensión
+        # Instalar localmente
         if [[ "$archivo" == *.rpm ]]; then
             dnf install -y "/tmp/$archivo" >/dev/null 2>&1
         elif [[ "$archivo" == *.tar.gz ]]; then
@@ -352,6 +353,53 @@ Instalar_Servicio() {
 }
 
 # ================================================================
+# ESTRUCTURA DEL ARBOL DE CARPETAS (P07)
+# ================================================================
+Mostrar_Arbol_Carpetas() {
+    local RAIZ="/srv/ftp/general"
+    
+    echo -e "\n${YELLOW}============================================================${NC}"
+    echo -e "${YELLOW}   ESTRUCTURA DEL DIRECTORIO FTP (Linux - $RAIZ)${NC}"
+    echo -e "${YELLOW}============================================================${NC}"
+    
+    # Comprobar si existe la utilidad tree, si no, instalarla
+    if ! command -v tree &> /dev/null; then
+        echo -e "${GRAY}[*] Instalando comando 'tree' para visualizar estructura...${NC}"
+        dnf install -y tree >/dev/null 2>&1
+    fi
+
+    # Comprobar si la ruta existe, si no crear la estructura falsa de la práctica
+    if [ ! -d "$RAIZ/http" ]; then
+        echo -e "${CYAN}[*] La estructura P07 no existe, creandola automaticamente...${NC}"
+        mkdir -p "$RAIZ/http/Linux/Apache"
+        mkdir -p "$RAIZ/http/Linux/Nginx"
+        mkdir -p "$RAIZ/http/Linux/Tomcat"
+        mkdir -p "$RAIZ/http/Windows/Apache"
+        mkdir -p "$RAIZ/http/Windows/Nginx"
+        mkdir -p "$RAIZ/http/Windows/Tomcat"
+        mkdir -p "$RAIZ/http/Windows/IIS"
+
+        touch "$RAIZ/http/Linux/Apache/apache_2.4.deb"
+        touch "$RAIZ/http/Linux/Nginx/nginx.tar.gz"
+        touch "$RAIZ/http/Linux/Tomcat/tomcat_10.tar.gz"
+        touch "$RAIZ/http/Windows/Apache/apache_2.4.zip"
+        touch "$RAIZ/http/Windows/Nginx/nginx.zip"
+        touch "$RAIZ/http/Windows/Tomcat/tomcat_10.msi"
+        touch "$RAIZ/http/Windows/IIS/iis_installer.exe"
+        
+        # Generar archivos de hash simulados para que el tree se vea completo
+        for f in $(find "$RAIZ/http" -type f); do
+            echo "HASH_FALSO" > "$f.sha256"
+        done
+        echo -e "${GREEN}[OK] Estructura creada exitosamente.${NC}"
+    fi
+
+    # Mostrar el arbol
+    tree "$RAIZ" -a
+    read -p "Presione Enter para continuar..."
+}
+
+# ================================================================
 # FTP SEGURO E INICIALIZACION (VSFTPD)
 # ================================================================
 Configurar_FTP_Seguro() {
@@ -364,7 +412,6 @@ Configurar_FTP_Seguro() {
 
     local conf="/etc/vsftpd/vsftpd.conf"
     
-    # Limpiar lineas SSL previas si existen
     sed -i '/ssl_enable/d' $conf
     sed -i '/allow_anon_ssl/d' $conf
     sed -i '/force_local_data_ssl/d' $conf
@@ -373,7 +420,6 @@ Configurar_FTP_Seguro() {
     sed -i '/rsa_cert_file/d' $conf
     sed -i '/rsa_private_key_file/d' $conf
 
-    # Agregar configuracion TLS
     cat <<EOF >> $conf
 
 # --- Configuracion SSL/TLS Inyectada ---
@@ -404,8 +450,7 @@ EOF
 # MENU PRINCIPAL
 # ================================================================
 Menu_Principal() {
-    # Definir variables de FTP (apuntando a tu maquina de Windows si la tienes en la red)
-    export FTP_IP="192.168.56.1" # Cambia esto por la IP de tu servidor FTP si es otra
+    export FTP_IP="192.168.56.1" # IP de tu Server FTP en Windows
     export FTP_USER="anonymous"
     export FTP_PASS=""
 
@@ -418,10 +463,10 @@ Menu_Principal() {
         echo " 1) Instalar + Desplegar Nginx"
         echo " 2) Instalar + Desplegar Apache"
         echo " 3) Instalar + Desplegar Tomcat"
-        echo " 4) Configurar FTP Seguro (vsftpd TLS)"
-        echo " 5) Configurar Puerto por Defecto"
+        echo " 4) Configurar Puerto por Defecto"
         echo "----------------------------------------------------"
-        echo " 6) Mostrar Resumen de Puertos (Netstat)"
+        echo " 5) Mostrar Resumen de Puertos (Netstat)"
+        echo " 6) Mostrar Arbol de Carpetas (FTP)"
         echo " 7) Salir"
         echo -e "${CYAN}====================================================${NC}"
         read -p " Opcion: " opcion
@@ -430,8 +475,7 @@ Menu_Principal() {
             1) Instalar_Servicio "nginx" ;;
             2) Instalar_Servicio "apache" ;;
             3) Instalar_Servicio "tomcat" ;;
-            4) Configurar_FTP_Seguro ;;
-            5) 
+            4) 
                 read -p "Ingrese el puerto (recomendado: 8080, 8443, 9090): " nuevo
                 if [[ "$nuevo" =~ ^[0-9]+$ ]]; then
                     PUERTO_ACTUAL=$nuevo
@@ -439,11 +483,12 @@ Menu_Principal() {
                 fi
                 sleep 1
                 ;;
-            6) 
+            5) 
                 echo -e "\n${CYAN}--- Puertos a la escucha ---${NC}"
                 ss -tuln | grep -E ':(80|443|21|8080|8081|8082|8443|9090)'
                 read -p "Enter para continuar..."
                 ;;
+            6) Mostrar_Arbol_Carpetas ;;
             7) exit 0 ;;
             *) echo -e "${RED}Opcion invalida${NC}"; sleep 1 ;;
         esac
