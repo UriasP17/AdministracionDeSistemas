@@ -10,7 +10,7 @@ $PUERTOS_BLOQUEADOS = @(1,7,9,11,13,15,17,19,20,21,22,23,25,37,42,43,53,69,77,79
     2049,3659,4045,6000,6665,6666,6667,6668,6669,6697)
 
 # ================================================================
-# LIMPIEZA Y PAGINA
+# LIMPIEZA Y PAGINA (SOLO NGINX E IIS, APACHE SE MANEJA APARTE)
 # ================================================================
 
 function Garantizar-Chocolatey {
@@ -41,7 +41,6 @@ function Crear-Pagina {
     
     $paths = @{
         "nginx"  = "C:\tools\nginx-1.29.6\html\index.html"
-        "apache" = "C:\Users\vboxuser\AppData\Roaming\Apache24\htdocs\index.html"
         "iis"    = "C:\Sitio_IIS_Limpio\index.html"
     }
     
@@ -52,10 +51,7 @@ function Crear-Pagina {
     if (!(Test-Path $dir)) { New-Item $dir -ItemType Directory -Force | Out-Null }
     
     $color = "#009688"
-    $msg   = "Servicio Activo"
-    
-    if ($servicio -eq "apache") { $color = "#D32F2F" }
-    if ($servicio -eq "iis")    { $color = "#0288D1" }
+    if ($servicio -eq "iis") { $color = "#0288D1" }
 
     $servidorNombre = $servicio.ToUpper()
 
@@ -78,7 +74,7 @@ function Crear-Pagina {
 <div class="wrap">
   <div class="dot"></div>
   <h1>$servidorNombre</h1>
-  <div class="badge">$msg</div>
+  <div class="badge">Servicio Activo</div>
   <div class="meta">www.reprobados.com - Puerto: $puerto</div>
 </div>
 </body>
@@ -222,10 +218,30 @@ http {
             }
             if (!$rutaApache) { Write-Host "[!] Apache no encontrado." -ForegroundColor Red; Pause; return }
             
-            $conf    = "$rutaApache\conf\httpd.conf"
-            $webRoot = "$rutaApache\htdocs"
+            $conf = "$rutaApache\conf\httpd.conf"
             $certDir = "C:/ssl/reprobados"
-            $webDir  = $webRoot -replace '\\','/'
+            
+            # --- EL CAMBIO MAGICO DE APACHE: Usar carpeta nueva y forzarlo ---
+            $webRootNuevo = "C:\Sitio_Apache_Limpio"
+            if (!(Test-Path $webRootNuevo)) { New-Item $webRootNuevo -ItemType Directory -Force | Out-Null }
+            $webDir = $webRootNuevo -replace '\\','/'
+
+            $html = @"
+<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>APACHE</title><style>
+body { margin: 0; font-family: sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; background: #fafafa; color: #111; }
+.wrap { text-align: center; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: #D32F2F; display: inline-block; margin-bottom: 2rem; }
+h1 { font-size: 1.6rem; font-weight: 600; margin: 0 0 .4rem; }
+.badge { display: inline-block; margin: 1.2rem 0; padding: .3rem .9rem; border: 1.5px solid #D32F2F; color: #D32F2F; font-size: .85rem; border-radius: 99px; }
+.meta { font-size: .85rem; color: #777; margin-top: .5rem; }
+</style></head><body><div class="wrap"><div class="dot"></div><h1>APACHE</h1><div class="badge">Servicio Activo</div><div class="meta">www.reprobados.com - Puerto: $P</div></div></body></html>
+"@
+            Set-Content -Path "$webRootNuevo\index.html" -Value $html -Encoding UTF8 -Force
+
+            (Get-Content $conf) -replace 'DocumentRoot ".*"', "DocumentRoot `"$webDir`"" `
+                                -replace '<Directory ".*htdocs">', "<Directory `"$webDir`">" | 
+            Set-Content $conf -Encoding ASCII
+            # --------------------------------------------------------------
 
             $lineas = Get-Content $conf
             for ($i = 0; $i -lt $lineas.Count; $i++) {
@@ -284,7 +300,6 @@ http {
 
             $test = & "$rutaApache\bin\httpd.exe" -t 2>&1
             if ($test -match "Syntax OK") {
-                Crear-Pagina "apache" $P
                 Restart-Service Apache* -Force -ErrorAction SilentlyContinue
                 Start-Sleep -Seconds 3
             } else {
@@ -378,7 +393,6 @@ function Instalar-Servicio {
         
     } else {
         # === DESCARGA DESDE FTP IIS AISLADO ===
-        # La ruta DEBE empezar con LocalUser/Public por el UserIsolation de tu servidor IIS
         $ftpRuta = "ftp://$($global:FTP_IP)/LocalUser/Public/general/http/Windows/$ServicioFTP"
         
         $archivo = switch ($Servicio.ToLower()) {
@@ -394,7 +408,6 @@ function Instalar-Servicio {
         Write-Host "[*] Descargando $archivo desde FTP IIS ($ftpRuta)..." -ForegroundColor Cyan
         
         try {
-            # 1. Ignorar errores de certificados autofirmados
             if (-not ([System.Management.Automation.PSTypeName]'TrustAllCertsPolicy').Type) {
                 add-type @"
                     using System.Net;
@@ -410,11 +423,9 @@ function Instalar-Servicio {
             }
             [System.Net.ServicePointManager]::CertificatePolicy = New-Object TrustAllCertsPolicy
             
-            # 2. Credencial obligatoria: anonymous y password con arroba (IIS lo requiere asi)
             $passSecure = ConvertTo-SecureString "anonymous@" -AsPlainText -Force
             $cred = New-Object System.Management.Automation.PSCredential("anonymous", $passSecure)
 
-            # 3. Descargamos usando Invoke-WebRequest nativo
             Invoke-WebRequest -Uri "$ftpRuta/$archivo" -OutFile $destLocal -Credential $cred -ErrorAction Stop
             Invoke-WebRequest -Uri "$ftpRuta/$archivo.sha256" -OutFile $hashFileLocal -Credential $cred -ErrorAction Stop
             
@@ -490,7 +501,6 @@ function Mostrar-Arbol-FTP {
 # ================================================================
 
 function Menu-FTP-HTTP {
-    # Sacamos la IP automaticamente
     $global:FTP_IP   = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceAlias -notlike "*Loopback*" -and $_.IPAddress -notlike "169.*" } | Select-Object -First 1).IPAddress
     if (!$global:FTP_IP) { $global:FTP_IP = "192.168.56.10" }
 
