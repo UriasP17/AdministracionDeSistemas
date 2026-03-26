@@ -12,28 +12,24 @@ if (-not (Test-Path $rutaNoCuates)) { New-Item -ItemType Directory -Path $rutaNo
 
 Write-Host "Aplicando Cuotas de Disco Estrictas..." -ForegroundColor Yellow
 
-# Limpiar cuotas previas si el script se corre mas de una vez
-Remove-FsrmQuota -Path $rutaCuates -ErrorAction SilentlyContinue
-Remove-FsrmQuota -Path $rutaNoCuates -ErrorAction SilentlyContinue
-
+# Limpiar cuotas previas sin pedir confirmacion (La magia esta aqui)
+Remove-FsrmQuota -Path $rutaCuates -ErrorAction SilentlyContinue -Confirm:$false
+Remove-FsrmQuota -Path $rutaNoCuates -ErrorAction SilentlyContinue -Confirm:$false
 
 New-FsrmQuota -Path $rutaCuates -Description "Cuota estricta Cuates" -Size 10MB
 New-FsrmQuota -Path $rutaNoCuates -Description "Cuota estricta No Cuates" -Size 5MB
 
 Write-Host "Configurando el Bloqueo de Archivos (File Screen)..." -ForegroundColor Yellow
 
-
 try { 
     New-FsrmFileGroup -Name "Prohibidos Practica" -IncludePattern @("*.mp3", "*.mp4", "*.exe", "*.msi") -ErrorAction Stop 
 } catch {}
 
-
-Remove-FsrmFileScreen -Path $rutaCuates -ErrorAction SilentlyContinue
-Remove-FsrmFileScreen -Path $rutaNoCuates -ErrorAction SilentlyContinue
-
+# Limpiar bloqueos previos sin pedir confirmacion
+Remove-FsrmFileScreen -Path $rutaCuates -ErrorAction SilentlyContinue -Confirm:$false
+Remove-FsrmFileScreen -Path $rutaNoCuates -ErrorAction SilentlyContinue -Confirm:$false
 
 $EventoFSRM = New-FsrmAction -Type Event -EventType Warning -Body "BLOQUEO FSRM: El usuario [Source Io Owner] intento guardar el archivo prohibido [Source File Path] en el servidor."
-
 
 New-FsrmFileScreen -Path $rutaCuates -Active -IncludeGroup "Prohibidos Practica" -Notification $EventoFSRM
 New-FsrmFileScreen -Path $rutaNoCuates -Active -IncludeGroup "Prohibidos Practica" -Notification $EventoFSRM
