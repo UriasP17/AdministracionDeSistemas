@@ -1,6 +1,6 @@
 #Requires -RunAsAdministrator
 
-#  Practica8.ps1 — Script unificado
+#  Practica8.ps1
 
 Import-Module ActiveDirectory -ErrorAction Stop
 
@@ -111,7 +111,8 @@ function Configurar-Carpetas {
 
         $aclP = Get-Acl $rutaPrivada
         $aclP.SetAccessRuleProtection($true, $false)
-        $aclP.SetAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule("Administrators","FullControl","ContainerInherit,ObjectInherit","None","Allow")))
+        # Adaptado para Windows Server en espanol
+        $aclP.SetAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule("Administradores","FullControl","ContainerInherit,ObjectInherit","None","Allow")))
         $aclP.SetAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule("$Dominio\$nombre","Modify","ContainerInherit,ObjectInherit","None","Allow")))
         Set-Acl $rutaPrivada $aclP
 
@@ -124,7 +125,7 @@ function Configurar-Carpetas {
 }
 
 function Configurar-GPO-Logoff {
-    Write-Host "`n[5/6] Configurando GPO de cierre forzado de sesión..." -ForegroundColor Cyan
+    Write-Host "`n[5/6] Configurando GPO de cierre forzado de sesion..." -ForegroundColor Cyan
     $dominioDN = (Get-ADDomain).DistinguishedName
     $gpoName   = "Politicas_FIM_CierreForzado"
 
@@ -146,8 +147,10 @@ function Configurar-FSRM {
     foreach ($plantilla in @("FIM_10MB","FIM_5MB")) {
         if (Get-FsrmQuotaTemplate -Name $plantilla -ErrorAction SilentlyContinue) { Remove-FsrmQuotaTemplate -Name $plantilla -Confirm:$false }
     }
-    New-FsrmQuotaTemplate -Name "FIM_10MB" -Size 10MB -SoftLimit $false
-    New-FsrmQuotaTemplate -Name "FIM_5MB"  -Size 5MB  -SoftLimit $false
+    
+    # Sintaxis corregida sin el parametro de SoftLimit que daba error
+    New-FsrmQuotaTemplate -Name "FIM_10MB" -Size 10MB
+    New-FsrmQuotaTemplate -Name "FIM_5MB"  -Size 5MB
 
     Get-ChildItem $rutaCuates -Directory | ForEach-Object {
         if (Get-FsrmQuota -Path $_.FullName -ErrorAction SilentlyContinue) { Remove-FsrmQuota -Path $_.FullName -Confirm:$false }
@@ -174,7 +177,8 @@ function Configurar-AppLocker {
 
     $sidNoCuates = (Get-ADGroup "Grupo_NoCuates").SID.Value
     
-    $reglaDefault = Get-AppLockerFileInformation -Directory "C:\Windows\" -Recurse -ErrorAction SilentlyContinue | New-AppLockerPolicy -RuleType Path -User Everyone -Optimize
+    # Adaptado para Windows Server en espanol ("Todos" en lugar de "Everyone")
+    $reglaDefault = Get-AppLockerFileInformation -Directory "C:\Windows\" -Recurse -ErrorAction SilentlyContinue | New-AppLockerPolicy -RuleType Path -User "Todos" -Optimize
     $reglaApp = Get-AppLockerFileInformation -Path "C:\Windows\System32\notepad.exe" | New-AppLockerPolicy -RuleType Hash -User $sidNoCuates
     
     foreach($RC in $reglaApp.RuleCollections) { foreach($rule in $RC) { $rule.Action = 'Deny' } }
@@ -195,9 +199,9 @@ function Ejecutar-Todo {
     Configurar-FSRM
     Configurar-AppLocker
     
-    Write-Host "`n[+] Aplicando políticas..." -ForegroundColor Cyan
+    Write-Host "`n[+] Aplicando politicas..." -ForegroundColor Cyan
     gpupdate /force
-    Write-Host "`n¡PRÁCTICA CONFIGURADA CON ÉXITO!" -ForegroundColor Green
+    Write-Host "`n¡PRACTICA CONFIGURADA CON EXITO!" -ForegroundColor Green
 }
 
 # ============================================================
