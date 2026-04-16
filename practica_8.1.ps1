@@ -1,12 +1,12 @@
 #Requires -RunAsAdministrator
 # ============================================================
-#  Practica8.ps1 — Script unificado (CORREGIDO Y LISTO)
-#  Coloca este archivo en C:\Practica8\
+#  Practica8.ps1 — Script unificado (A PRUEBA DE FALLOS)
+#  Coloca este archivo en C:\Proyectos\MiRepo\
 # ============================================================
 
 Import-Module ActiveDirectory -ErrorAction Stop
 
-$RutaCSV = Join-Path -Path $PSScriptRoot -ChildPath "usuarios.csv"
+$RutaCSV  = Join-Path -Path $PSScriptRoot -ChildPath "usuarios.csv"
 $RutaRaiz = "C:\Perfiles"
 
 # ============================================================
@@ -78,7 +78,6 @@ function Importar-UsuariosCSV {
         $grupo   = if ($nDepto -eq "Cuates") { "Grupo_Cuates" } else { "Grupo_NoCuates" }
         [byte[]]$logonHours = if ($nDepto -eq "Cuates") { $horasCuates } else { $horasNoCuates }
 
-        # FIX: Contraseña en formato seguro correctamente
         $securePass = ConvertTo-SecureString $nPass -AsPlainText -Force
         $upn = "$nUsuario@$((Get-ADDomain).Forest)"
 
@@ -99,7 +98,7 @@ function Importar-UsuariosCSV {
 }
 
 function Configurar-Carpetas {
-    Write-Host "`n[4/6] Creando estructura de carpetas, permisos y compartiendo en red..." -ForegroundColor Cyan
+    Write-Host "`n[4/6] Creando estructura de carpetas y permisos..." -ForegroundColor Cyan
     $Dominio = (Get-ADDomain).NetBIOSName
     $usuarios = Import-Csv $RutaCSV
 
@@ -112,20 +111,18 @@ function Configurar-Carpetas {
             New-Item -Path $rutaPrivada -ItemType Directory -Force | Out-Null
         }
 
-        # Aplicar permisos NTFS locales
         $aclP = Get-Acl $rutaPrivada
         $aclP.SetAccessRuleProtection($true, $false)
         $aclP.SetAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule("Administrators","FullControl","ContainerInherit,ObjectInherit","None","Allow")))
         $aclP.SetAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule("$Dominio\$nombre","Modify","ContainerInherit,ObjectInherit","None","Allow")))
         Set-Acl $rutaPrivada $aclP
 
-        # FIX: Compartir la carpeta en la red (SMB) para que el cliente Linux pueda mapearla
         $shareName = $nombre
         if (-not (Get-SmbShare -Name $shareName -ErrorAction SilentlyContinue)) {
             New-SmbShare -Name $shareName -Path $rutaPrivada -FullAccess "$Dominio\$nombre" -ErrorAction SilentlyContinue
-            Write-Host "      Carpeta compartida en red: \\$env:COMPUTERNAME\$shareName" -ForegroundColor Green
         }
     }
+    Write-Host "      Carpetas creadas y compartidas en red." -ForegroundColor Green
 }
 
 function Configurar-GPO-Logoff {
@@ -165,36 +162,29 @@ function Configurar-FSRM {
 
     if (Get-FsrmFileGroup -Name "Archivos_Prohibidos_FIM" -ErrorAction SilentlyContinue) { Remove-FsrmFileGroup -Name "Archivos_Prohibidos_FIM" -Confirm:$false }
     New-FsrmFileGroup -Name "Archivos_Prohibidos_FIM" -IncludePattern @("*.mp3","*.mp4","*.exe","*.msi")
-
-    $accionEvento = New-FsrmAction -Type EventLog -EventType Warning -Body "FSRM BLOQUEO: [Source File Path] | Usuario: [Source Io Owner] | Fecha: [Date]"
     
     if (Get-FsrmFileScreen -Path $RutaRaiz -ErrorAction SilentlyContinue) { Remove-FsrmFileScreen -Path $RutaRaiz -Confirm:$false }
-    New-FsrmFileScreen -Path $RutaRaiz -IncludeGroup "Archivos_Prohibidos_FIM" -Active -Notification $accionEvento
+    New-FsrmFileScreen -Path $RutaRaiz -IncludeGroup "Archivos_Prohibidos_FIM" -Active
 
-    Write-Host "      FSRM Configurado: Cuotas asignadas y bloqueo multimedia/ejecutable activo." -ForegroundColor Green
+    Write-Host "      FSRM Configurado: Cuotas y bloqueos listos." -ForegroundColor Green
 }
 
 function Configurar-AppLocker {
     Write-Host "`n[6b] Configurando AppLocker (Deny Notepad por Hash)..." -ForegroundColor Cyan
-    
-    # Iniciar servicio AppIDSvc
     Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Services\AppIDSvc" -Name "Start" -Value 2 -ErrorAction SilentlyContinue
     Start-Service -Name AppIDSvc -ErrorAction SilentlyContinue
 
     $sidNoCuates = (Get-ADGroup "Grupo_NoCuates").SID.Value
     
-    # FIX: Generar reglas usando los comandos oficiales de PowerShell (Evita el error de inyección XML)
     $reglaDefault = Get-AppLockerFileInformation -Directory "C:\Windows\" -Recurse -ErrorAction SilentlyContinue | New-AppLockerPolicy -RuleType Path -User Everyone -Optimize
     $reglaApp = Get-AppLockerFileInformation -Path "C:\Windows\System32\notepad.exe" | New-AppLockerPolicy -RuleType Hash -User $sidNoCuates
     
-    # Cambiar la regla a Deny
     foreach($RC in $reglaApp.RuleCollections) { foreach($rule in $RC) { $rule.Action = 'Deny' } }
 
-    # Aplicar y combinar
     Set-AppLockerPolicy -PolicyObject $reglaDefault -Merge -ErrorAction SilentlyContinue
     Set-AppLockerPolicy -PolicyObject $reglaApp -Merge -ErrorAction SilentlyContinue
 
-    Write-Host "      Notepad BLOQUEADO por Hash para Grupo_NoCuates (SID: $sidNoCuates)." -ForegroundColor Green
+    Write-Host "      AppLocker configurado y activo." -ForegroundColor Green
 }
 
 function Ejecutar-Todo {
@@ -213,25 +203,28 @@ function Ejecutar-Todo {
 }
 
 # ============================================================
-#  MENÚ PRINCIPAL
+#  MENÚ PRINCIPAL (SIN WRITE-HOST PARA EVITAR ERRORES DE GITHUB)
 # ============================================================
+$MenuTexto = @"
+==========================================
+       PRÁCTICA 8 — MENÚ PRINCIPAL        
+==========================================
+  [1]  Instalar Requisitos (FSRM + GPMC)
+  [2]  Crear Estructura AD (OUs + Grupos)
+  [3]  Importar Usuarios del CSV
+  [4]  Crear Carpetas y Permisos (SMB)
+  [5]  Configurar GPO Cierre Forzado
+  [6]  Configurar FSRM (Cuotas + Pantalla)
+  [7]  Configurar AppLocker
+------------------------------------------
+  [A]  EJECUTAR TODO (1 al 7)
+  [S]  Salir
+==========================================
+"@
+
 do {
     Clear-Host
-    Write-Host "==========================================" -ForegroundColor Yellow
-    Write-Host "       PRÁCTICA 8 — MENÚ PRINCIPAL        " -ForegroundColor Yellow
-    Write-Host "==========================================" -ForegroundColor Yellow
-    Write-Host "  [1]  Instalar Requisitos (FSRM + GPMC)"
-    Write-Host "  [2]  Crear Estructura AD (OUs + Grupos)"
-    Write-Host "  [3]  Importar Usuarios del CSV"
-    Write-Host "  [4]  Crear Carpetas y Permisos (SMB)"
-    Write-Host "  [5]  Configurar GPO Cierre Forzado"
-    Write-Host "  [6]  Configurar FSRM (Cuotas + Pantalla)"
-    Write-Host "  [7]  Configurar AppLocker"
-    Write-Host "------------------------------------------"
-    Write-Host "  [A]  EJECUTAR TODO (1 al 7)" -ForegroundColor Green
-    Write-Host "  [S]  Salir" -ForegroundColor Red
-    Write-Host "=========================================="
-    
+    Write-Host $MenuTexto -ForegroundColor Yellow
     $opcion = Read-Host "Selecciona una opcion"
     
     switch ($opcion.ToUpper()) {
@@ -244,10 +237,6 @@ do {
         "7" { Configurar-AppLocker }
         "A" { Ejecutar-Todo }
         "S" { break }
-        default { Write-Host "`n[X] Opcion no valida." -ForegroundColor Red }
     }
-    
-    if ($opcion.ToUpper() -ne "S") { 
-        Read-Host "`nPresiona ENTER para continuar..." | Out-Null 
-    }
+    if ($opcion.ToUpper() -ne "S") { Read-Host "`nPresiona ENTER para continuar..." | Out-Null }
 } while ($opcion.ToUpper() -ne "S")
