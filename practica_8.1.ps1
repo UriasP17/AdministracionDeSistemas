@@ -1,5 +1,9 @@
 #Requires -RunAsAdministrator
-#  Practica8.ps1
+# ============================================================
+#  Practica8.ps1 — Script unificado con menú interactivo
+#  Gestión de Recursos y Restricción del Entorno Operativo
+#  Coloca este archivo en C:\Proyectos\MiRepo\
+# ============================================================
 
 Import-Module ActiveDirectory -ErrorAction Stop
 
@@ -123,7 +127,7 @@ function Configurar-Carpetas {
 }
 
 function Configurar-GPO-Logoff {
-    Write-Host "`n[5/6] Configurando GPO de cierre forzado de sesion..." -ForegroundColor Cyan
+    Write-Host "`n[5/6] Configurando GPO de cierre forzado de sesión..." -ForegroundColor Cyan
     $dominioDN = (Get-ADDomain).DistinguishedName
     $gpoName   = "Politicas_FIM_CierreForzado"
 
@@ -168,37 +172,72 @@ function Configurar-FSRM {
 }
 
 function Configurar-AppLocker {
-    Write-Host "`n[6b] Configurando AppLocker en GPO (SOLO PARA CLIENTES)..." -ForegroundColor Cyan
-
-    $nombreGPO = "Bloqueo_Notepad"
+    Write-Host "`n[6b] Configurando AppLocker (GPO para Clientes)..." -ForegroundColor Cyan
     $dominioDN = (Get-ADDomain).DistinguishedName
-    $ouTarget  = "OU=No Cuates,$dominioDN"
+    $gpoName   = "Politicas_FIM_AppLocker"
 
-    # 1. Crear la GPO y vincularla EXCLUSIVAMENTE a los No Cuates
-    if (-not (Get-GPO -Name $nombreGPO -ErrorAction SilentlyContinue)) {
-        New-GPO -Name $nombreGPO | Out-Null
+    # 1. Crear la GPO si no existe
+    if (-not (Get-GPO -Name $gpoName -ErrorAction SilentlyContinue)) {
+        New-GPO -Name $gpoName | Out-Null
+        Write-Host "      GPO '$gpoName' creada." -ForegroundColor Green
     }
-    $linkExiste = Get-GPInheritance -Target $ouTarget | Select-Object -ExpandProperty GpoLinks | Where-Object { $_.DisplayName -eq $nombreGPO }
-    if (-not $linkExiste) { New-GPLink -Name $nombreGPO -Target $ouTarget | Out-Null }
 
-    # 2. Configurar la GPO para que los clientes inicien el servicio AppIDSvc automaticamente (Start = 2)
-    Set-GPRegistryValue -Name $nombreGPO -Key "HKLM\System\CurrentControlSet\Services\AppIDSvc" -ValueName "Start" -Type DWord -Value 2 | Out-Null
+    # 2. Vincular GPO a nivel de Dominio para que alcance a la OU "Computers" de Windows 11
+    $linkExiste = Get-GPInheritance -Target $dominioDN | Select-Object -ExpandProperty GpoLinks | Where-Object { $_.DisplayName -eq $gpoName }
+    if (-not $linkExiste) {
+        New-GPLink -Name $gpoName -Target $dominioDN | Out-Null
+        Write-Host "      GPO vinculada al dominio." -ForegroundColor Green
+    }
 
-    # 3. Generar las reglas en memoria
+    # 3. Configurar la GPO para encender el servicio AppIDSvc automaticamente en los clientes
+    Set-GPRegistryValue -Name $gpoName `
+        -Key "HKLM\System\CurrentControlSet\Services\AppIDSvc" `
+        -ValueName "Start" `
+        -Type DWord -Value 2 | Out-Null
+
+    # 4. Obtener el SID real de Grupo_NoCuates
     $sidNoCuates = (Get-ADGroup "Grupo_NoCuates").SID.Value
-    $reglaDefault = Get-AppLockerFileInformation -Directory "C:\Windows\" -Recurse -ErrorAction SilentlyContinue | New-AppLockerPolicy -RuleType Path -User "Todos" -Optimize
-    $reglaApp = Get-AppLockerFileInformation -Path "C:\Windows\System32\notepad.exe" | New-AppLockerPolicy -RuleType Hash -User $sidNoCuates
-    foreach($RC in $reglaApp.RuleCollections) { foreach($rule in $RC) { $rule.Action = 'Deny' } }
 
-    # 4. Inyectar las reglas a la GPO usando LDAP (NUNCA mas local)
-    $gpoInfo = Get-GPO -Name $nombreGPO
+    # 5. Obtener el hash de notepad.exe del servidor para inyectarlo en la regla
+    $hashInfo  = Get-AppLockerFileInformation -Path "C:\Windows\System32\notepad.exe"
+    $hashValue = $hashInfo.Hash.HashDataString
+    $hashAlgo  = $hashInfo.Hash.HashType        
+    $fileLen   = (Get-Item "C:\Windows\System32\notepad.exe").Length
+
+    # 6. Construir el XML con las reglas base y la de bloqueo de hash
+    $guidDeny = [System.Guid]::NewGuid().ToString()
+    $xmlPolicy = @"
+<AppLockerPolicy Version="1">
+  <RuleCollection Type="Exe" EnforcementMode="Enabled">
+    <FilePathRule Id="921cc481-6e17-4653-8f75-050b80acca20" Name="Permitir Program Files" Description="" UserOrGroupSid="S-1-1-0" Action="Allow">
+      <Conditions><FilePathCondition Path="%PROGRAMFILES%\*"/></Conditions>
+    </FilePathRule>
+    <FilePathRule Id="a61c8b2c-a319-4cd0-9690-d2177cad7e51" Name="Permitir Windows" Description="" UserOrGroupSid="S-1-1-0" Action="Allow">
+      <Conditions><FilePathCondition Path="%WINDIR%\*"/></Conditions>
+    </FilePathRule>
+    <FilePathRule Id="fd686d83-a829-4351-8ff4-27c7de5755d2" Name="Permitir Administradores" Description="" UserOrGroupSid="S-1-5-32-544" Action="Allow">
+      <Conditions><FilePathCondition Path="*"/></Conditions>
+    </FilePathRule>
+    <FileHashRule Id="$guidDeny" Name="Bloquear Notepad - Grupo NoCuates" Description="" UserOrGroupSid="$sidNoCuates" Action="Deny">
+      <Conditions>
+        <FileHashCondition>
+          <FileHash Type="$hashAlgo" Data="$hashValue" SourceFileLength="$fileLen" SourceFileName="notepad.exe"/>
+        </FileHashCondition>
+      </Conditions>
+    </FileHashRule>
+  </RuleCollection>
+</AppLockerPolicy>
+"@
+    $xmlPolicy | Set-Content "$env:TEMP\applocker_gpo.xml" -Encoding UTF8
+
+    # 7. Inyectar el XML directamente en la GPO via LDAP
+    $gpoInfo = Get-GPO -Name $gpoName
     $ldapPath = "LDAP://CN={$($gpoInfo.Id)},CN=Policies,CN=System,$dominioDN"
+    
+    Set-AppLockerPolicy -XmlPolicy "$env:TEMP\applocker_gpo.xml" -LDAP $ldapPath -ErrorAction SilentlyContinue
 
-    Set-AppLockerPolicy -PolicyObject $reglaDefault -LDAP $ldapPath -Merge -ErrorAction SilentlyContinue
-    Set-AppLockerPolicy -PolicyObject $reglaApp -LDAP $ldapPath -Merge -ErrorAction SilentlyContinue
-
-    Write-Host "      GPO '$nombreGPO' creada y vinculada a la OU 'No Cuates'." -ForegroundColor Green
-    Write-Host "      AppLocker NO afectara a este Servidor." -ForegroundColor Green
+    Write-Host "      Politicas de AppLocker inyectadas en la GPO (LDAP)." -ForegroundColor Green
+    Write-Host "      El servidor local NO se vera afectado." -ForegroundColor Green
 }
 
 function Ejecutar-Todo {
