@@ -1,5 +1,4 @@
 #Requires -RunAsAdministrator
-
 #  Practica8.ps1
 
 Import-Module ActiveDirectory -ErrorAction Stop
@@ -111,7 +110,6 @@ function Configurar-Carpetas {
 
         $aclP = Get-Acl $rutaPrivada
         $aclP.SetAccessRuleProtection($true, $false)
-        # Adaptado para Windows Server en espanol
         $aclP.SetAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule("Administradores","FullControl","ContainerInherit,ObjectInherit","None","Allow")))
         $aclP.SetAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule("$Dominio\$nombre","Modify","ContainerInherit,ObjectInherit","None","Allow")))
         Set-Acl $rutaPrivada $aclP
@@ -148,7 +146,6 @@ function Configurar-FSRM {
         if (Get-FsrmQuotaTemplate -Name $plantilla -ErrorAction SilentlyContinue) { Remove-FsrmQuotaTemplate -Name $plantilla -Confirm:$false }
     }
     
-    # Sintaxis corregida sin el parametro de SoftLimit que daba error
     New-FsrmQuotaTemplate -Name "FIM_10MB" -Size 10MB
     New-FsrmQuotaTemplate -Name "FIM_5MB"  -Size 5MB
 
@@ -171,22 +168,37 @@ function Configurar-FSRM {
 }
 
 function Configurar-AppLocker {
-    Write-Host "`n[6b] Configurando AppLocker (Deny Notepad por Hash)..." -ForegroundColor Cyan
-    Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Services\AppIDSvc" -Name "Start" -Value 2 -ErrorAction SilentlyContinue
-    Start-Service -Name AppIDSvc -ErrorAction SilentlyContinue
+    Write-Host "`n[6b] Configurando AppLocker en GPO (SOLO PARA CLIENTES)..." -ForegroundColor Cyan
 
+    $nombreGPO = "Bloqueo_Notepad"
+    $dominioDN = (Get-ADDomain).DistinguishedName
+    $ouTarget  = "OU=No Cuates,$dominioDN"
+
+    # 1. Crear la GPO y vincularla EXCLUSIVAMENTE a los No Cuates
+    if (-not (Get-GPO -Name $nombreGPO -ErrorAction SilentlyContinue)) {
+        New-GPO -Name $nombreGPO | Out-Null
+    }
+    $linkExiste = Get-GPInheritance -Target $ouTarget | Select-Object -ExpandProperty GpoLinks | Where-Object { $_.DisplayName -eq $nombreGPO }
+    if (-not $linkExiste) { New-GPLink -Name $nombreGPO -Target $ouTarget | Out-Null }
+
+    # 2. Configurar la GPO para que los clientes inicien el servicio AppIDSvc automaticamente (Start = 2)
+    Set-GPRegistryValue -Name $nombreGPO -Key "HKLM\System\CurrentControlSet\Services\AppIDSvc" -ValueName "Start" -Type DWord -Value 2 | Out-Null
+
+    # 3. Generar las reglas en memoria
     $sidNoCuates = (Get-ADGroup "Grupo_NoCuates").SID.Value
-    
-    # Adaptado para Windows Server en espanol ("Todos" en lugar de "Everyone")
     $reglaDefault = Get-AppLockerFileInformation -Directory "C:\Windows\" -Recurse -ErrorAction SilentlyContinue | New-AppLockerPolicy -RuleType Path -User "Todos" -Optimize
     $reglaApp = Get-AppLockerFileInformation -Path "C:\Windows\System32\notepad.exe" | New-AppLockerPolicy -RuleType Hash -User $sidNoCuates
-    
     foreach($RC in $reglaApp.RuleCollections) { foreach($rule in $RC) { $rule.Action = 'Deny' } }
 
-    Set-AppLockerPolicy -PolicyObject $reglaDefault -Merge -ErrorAction SilentlyContinue
-    Set-AppLockerPolicy -PolicyObject $reglaApp -Merge -ErrorAction SilentlyContinue
+    # 4. Inyectar las reglas a la GPO usando LDAP (NUNCA mas local)
+    $gpoInfo = Get-GPO -Name $nombreGPO
+    $ldapPath = "LDAP://CN={$($gpoInfo.Id)},CN=Policies,CN=System,$dominioDN"
 
-    Write-Host "      AppLocker configurado y activo." -ForegroundColor Green
+    Set-AppLockerPolicy -PolicyObject $reglaDefault -LDAP $ldapPath -Merge -ErrorAction SilentlyContinue
+    Set-AppLockerPolicy -PolicyObject $reglaApp -LDAP $ldapPath -Merge -ErrorAction SilentlyContinue
+
+    Write-Host "      GPO '$nombreGPO' creada y vinculada a la OU 'No Cuates'." -ForegroundColor Green
+    Write-Host "      AppLocker NO afectara a este Servidor." -ForegroundColor Green
 }
 
 function Ejecutar-Todo {
@@ -199,7 +211,7 @@ function Ejecutar-Todo {
     Configurar-FSRM
     Configurar-AppLocker
     
-    Write-Host "`n[+] Aplicando politicas..." -ForegroundColor Cyan
+    Write-Host "`n[+] Aplicando politicas de Dominio..." -ForegroundColor Cyan
     gpupdate /force
     Write-Host "`n¡PRACTICA CONFIGURADA CON EXITO!" -ForegroundColor Green
 }
@@ -218,7 +230,7 @@ do {
     Write-Host '  4) Crear Carpetas y Permisos (SMB)'
     Write-Host '  5) Configurar GPO Cierre Forzado'
     Write-Host '  6) Configurar FSRM (Cuotas + Pantalla)'
-    Write-Host '  7) Configurar AppLocker'
+    Write-Host '  7) Configurar AppLocker (GPO Clientes)'
     Write-Host '------------------------------------------'
     Write-Host '  A) EJECUTAR TODO' -ForegroundColor Green
     Write-Host '  S) Salir' -ForegroundColor Red
