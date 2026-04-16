@@ -1,8 +1,6 @@
 #Requires -RunAsAdministrator
-# ============================================================
-#  Practica8.ps1 — Script unificado (A PRUEBA DE FALLOS)
-#  Coloca este archivo en C:\Proyectos\MiRepo\
-# ============================================================
+
+#  Practica8.ps1 — Script unificado
 
 Import-Module ActiveDirectory -ErrorAction Stop
 
@@ -203,40 +201,40 @@ function Ejecutar-Todo {
 }
 
 # ============================================================
-#  MENÚ PRINCIPAL (SIN WRITE-HOST PARA EVITAR ERRORES DE GITHUB)
+#  MENU PRINCIPAL
 # ============================================================
-$MenuTexto = @"
-==========================================
-       PRÁCTICA 8 — MENÚ PRINCIPAL        
-==========================================
-  [1]  Instalar Requisitos (FSRM + GPMC)
-  [2]  Crear Estructura AD (OUs + Grupos)
-  [3]  Importar Usuarios del CSV
-  [4]  Crear Carpetas y Permisos (SMB)
-  [5]  Configurar GPO Cierre Forzado
-  [6]  Configurar FSRM (Cuotas + Pantalla)
-  [7]  Configurar AppLocker
-------------------------------------------
-  [A]  EJECUTAR TODO (1 al 7)
-  [S]  Salir
-==========================================
-"@
-
 do {
     Clear-Host
-    Write-Host $MenuTexto -ForegroundColor Yellow
-    $opcion = Read-Host "Selecciona una opcion"
+    Write-Host '==========================================' -ForegroundColor Yellow
+    Write-Host '       PRACTICA 8 - MENU PRINCIPAL        ' -ForegroundColor Yellow
+    Write-Host '==========================================' -ForegroundColor Yellow
+    Write-Host '  1) Instalar Requisitos (FSRM + GPMC)'
+    Write-Host '  2) Crear Estructura AD (OUs + Grupos)'
+    Write-Host '  3) Importar Usuarios del CSV'
+    Write-Host '  4) Crear Carpetas y Permisos (SMB)'
+    Write-Host '  5) Configurar GPO Cierre Forzado'
+    Write-Host '  6) Configurar FSRM (Cuotas + Pantalla)'
+    Write-Host '  7) Configurar AppLocker'
+    Write-Host '------------------------------------------'
+    Write-Host '  A) EJECUTAR TODO' -ForegroundColor Green
+    Write-Host '  S) Salir' -ForegroundColor Red
+    Write-Host '=========================================='
+    
+    $opcion = Read-Host 'Selecciona una opcion'
     
     switch ($opcion.ToUpper()) {
-        "1" { Instalar-Requisitos }
-        "2" { Crear-EstructuraAD }
-        "3" { Importar-UsuariosCSV }
-        "4" { Configurar-Carpetas }
-        "5" { Configurar-GPO-Logoff }
-        "6" { Configurar-FSRM }
-        "7" { Configurar-AppLocker }
-        "A" { Ejecutar-Todo }
-        "S" { break }
+        '1' { Instalar-Requisitos }
+        '2' { Crear-EstructuraAD }
+        '3' { Importar-UsuariosCSV }
+        '4' { Configurar-Carpetas }
+        '5' { Configurar-GPO-Logoff }
+        '6' { Configurar-FSRM }
+        '7' { Configurar-AppLocker }
+        'A' { Ejecutar-Todo }
+        'S' { break }
+        default { Write-Host 'Opcion no valida.' -ForegroundColor Red }
     }
-    if ($opcion.ToUpper() -ne "S") { Read-Host "`nPresiona ENTER para continuar..." | Out-Null }
-} while ($opcion.ToUpper() -ne "S")
+    if ($opcion.ToUpper() -ne 'S') { 
+        Read-Host 'Presiona ENTER para continuar...' | Out-Null 
+    }
+} while ($opcion.ToUpper() -ne 'S')
