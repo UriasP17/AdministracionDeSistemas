@@ -1,9 +1,6 @@
 #Requires -RunAsAdministrator
-# ============================================================
-#  Practica8.ps1 — Script unificado con menú interactivo
-#  Gestión de Recursos y Restricción del Entorno Operativo
-#  Coloca este archivo en C:\Proyectos\MiRepo\
-# ============================================================
+
+#  Practica8.ps1 
 
 Import-Module ActiveDirectory -ErrorAction Stop
 
