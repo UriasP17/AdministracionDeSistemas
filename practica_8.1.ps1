@@ -233,6 +233,7 @@ do {
     Write-Host "=========================================="
     
     $opcion = Read-Host "Selecciona una opcion"
+    
     switch ($opcion.ToUpper()) {
         "1" { Instalar-Requisitos }
         "2" { Crear-EstructuraAD }
@@ -243,6 +244,10 @@ do {
         "7" { Configurar-AppLocker }
         "A" { Ejecutar-Todo }
         "S" { break }
+        default { Write-Host "`n[X] Opcion no valida." -ForegroundColor Red }
     }
-    if ($opcion.ToUpper() -ne "S") { Read-Host "`nPresiona ENTER para continuar..." | Out-Null }
+    
+    if ($opcion.ToUpper() -ne "S") { 
+        Read-Host "`nPresiona ENTER para continuar..." | Out-Null 
+    }
 } while ($opcion.ToUpper() -ne "S")
