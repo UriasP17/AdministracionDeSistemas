@@ -6,7 +6,7 @@
 
 Import-Module ActiveDirectory -ErrorAction Stop
 
-$RutaCSV  = "C:\Practica8\usuarios.csv"
+$RutaCSV = Join-Path -Path $PSScriptRoot -ChildPath "usuarios.csv"
 $RutaRaiz = "C:\Perfiles"
 
 # ============================================================
