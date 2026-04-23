@@ -270,8 +270,9 @@ function Configurar-FSRM {
         Remove-FsrmQuotaTemplate -Name "P8_5MB" -Confirm:$false
     }
 
-    New-FsrmQuotaTemplate -Name "P8_10MB" -Size 10MB -SoftLimit $false
-    New-FsrmQuotaTemplate -Name "P8_5MB" -Size 5MB -SoftLimit $false
+    # Hard quota: NO pongas -SoftLimit
+    New-FsrmQuotaTemplate -Name "P8_10MB" -Size 10MB
+    New-FsrmQuotaTemplate -Name "P8_5MB" -Size 5MB
 
     if (Get-FsrmAutoQuota -Path $rutaCuates -ErrorAction SilentlyContinue) {
         Remove-FsrmAutoQuota -Path $rutaCuates -Confirm:$false
@@ -293,7 +294,7 @@ function Configurar-FSRM {
         Remove-FsrmFileScreen -Path $RutaRaiz -Confirm:$false
     }
 
-    $accion = New-FsrmAction -Type EventLog -EventType Warning -Body "Archivo bloqueado por FSRM"
+    $accion = New-FsrmAction -Type Event -EventType Warning -Body "Archivo bloqueado por FSRM"
 
     New-FsrmFileScreen -Path $RutaRaiz -IncludeGroup "P8_Archivos_Prohibidos" -Active -Notification $accion
 
