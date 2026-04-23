@@ -228,10 +228,22 @@ function Configurar-AppLocker {
     $netbios = (Get-ADDomain).NetBIOSName
     Stop-Service -Name AppIDSvc -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 2
-    $xmlBase = '<AppLockerPolicy Version="1"><RuleCollection Type="Exe" EnforcementMode="Enabled"><FilePathRule Id="921cc481-6e17-4653-8f75-050b80acca20" Name="ProgramFiles" Description="" UserOrGroupSid="S-1-1-0" Action="Allow"><Conditions><FilePathCondition Path="%PROGRAMFILES%\*"/></Conditions></FilePathRule><FilePathRule Id="a61c8b2c-a319-4cd0-9690-d2177cad7e51" Name="Windows" Description="" UserOrGroupSid="S-1-1-0" Action="Allow"><Conditions><FilePathCondition Path="%WINDIR%\*"/></Conditions></FilePathRule><FilePathRule Id="fd686d83-a829-4351-8ff4-27c7de5755d2" Name="Admins" Description="" UserOrGroupSid="S-1-5-32-544" Action="Allow"><Conditions><FilePathCondition Path="*"/></Conditions></FilePathRule></RuleCollection></AppLockerPolicy>'
+
+    $xmlBase  = '<?xml version="1.0"?>'
+    $xmlBase += '<AppLockerPolicy Version="1">'
+    $xmlBase += '<RuleCollection Type="Exe" EnforcementMode="Enabled">'
+    $xmlBase += '<FilePathRule Id="921cc481-6e17-4653-8f75-050b80acca20" Name="ProgramFiles" Description="" UserOrGroupSid="S-1-1-0" Action="Allow">'
+    $xmlBase += '<Conditions><FilePathCondition Path="%PROGRAMFILES%\*"/></Conditions></FilePathRule>'
+    $xmlBase += '<FilePathRule Id="a61c8b2c-a319-4cd0-9690-d2177cad7e51" Name="Windows" Description="" UserOrGroupSid="S-1-1-0" Action="Allow">'
+    $xmlBase += '<Conditions><FilePathCondition Path="%WINDIR%\*"/></Conditions></FilePathRule>'
+    $xmlBase += '<FilePathRule Id="fd686d83-a829-4351-8ff4-27c7de5755d2" Name="Admins" Description="" UserOrGroupSid="S-1-5-32-544" Action="Allow">'
+    $xmlBase += '<Conditions><FilePathCondition Path="*"/></Conditions></FilePathRule>'
+    $xmlBase += '</RuleCollection></AppLockerPolicy>'
+
     $xmlBase | Set-Content "$env:TEMP\p8_base.xml" -Encoding UTF8
     Set-AppLockerPolicy -XmlPolicy "$env:TEMP\p8_base.xml"
     Write-Host "      Reglas base aplicadas." -ForegroundColor Green
+
     try {
         $pol = Get-AppLockerFileInformation -Path "C:\Windows\System32\notepad.exe" |
                New-AppLockerPolicy -RuleType Hash -User "$netbios\Grupo_NoCuates" -ErrorAction Stop
@@ -294,19 +306,19 @@ function Verificar-Estado {
 do {
     Clear-Host
     Write-Host "============================================" -ForegroundColor Yellow
-    Write-Host "   PRACTICA 8 — reprobados.com             " -ForegroundColor Yellow
+    Write-Host "   PRACTICA 8 reprobados.com               " -ForegroundColor Yellow
     Write-Host "============================================" -ForegroundColor Yellow
-    Write-Host "  [C]  Generar CSV ejemplo (10 usuarios)"   -ForegroundColor Magenta
-    Write-Host "  [1]  Instalar FSRM + GPMC"                -ForegroundColor Cyan
-    Write-Host "  [2]  Crear OUs y Grupos AD"               -ForegroundColor Cyan
-    Write-Host "  [3]  Importar Usuarios CSV"               -ForegroundColor Cyan
-    Write-Host "  [4]  Carpetas + GPO Cierre Forzado"       -ForegroundColor Cyan
-    Write-Host "  [5]  FSRM Cuotas + Apantallamiento"       -ForegroundColor Cyan
-    Write-Host "  [6]  AppLocker Notepad"                   -ForegroundColor Cyan
-    Write-Host "  [A]  EJECUTAR TODO"                       -ForegroundColor Green
-    Write-Host "  [V]  Verificar estado"                    -ForegroundColor Cyan
-    Write-Host "  [G]  gpupdate /force"                     -ForegroundColor Magenta
-    Write-Host "  [S]  Salir"                               -ForegroundColor Red
+    Write-Host "  [C]  Generar CSV ejemplo"                  -ForegroundColor Magenta
+    Write-Host "  [1]  Instalar FSRM + GPMC"                 -ForegroundColor Cyan
+    Write-Host "  [2]  Crear OUs y Grupos AD"                -ForegroundColor Cyan
+    Write-Host "  [3]  Importar Usuarios CSV"                -ForegroundColor Cyan
+    Write-Host "  [4]  Carpetas + GPO Cierre Forzado"        -ForegroundColor Cyan
+    Write-Host "  [5]  FSRM Cuotas + Apantallamiento"        -ForegroundColor Cyan
+    Write-Host "  [6]  AppLocker Notepad"                    -ForegroundColor Cyan
+    Write-Host "  [A]  EJECUTAR TODO"                        -ForegroundColor Green
+    Write-Host "  [V]  Verificar estado"                     -ForegroundColor Cyan
+    Write-Host "  [G]  gpupdate /force"                      -ForegroundColor Magenta
+    Write-Host "  [S]  Salir"                                -ForegroundColor Red
     Write-Host "============================================" -ForegroundColor Yellow
     $op = Read-Host "Opcion"
     switch ($op.ToUpper()) {
@@ -335,5 +347,7 @@ do {
         "S" { Write-Host "Saliendo..." -ForegroundColor Red }
         default { Write-Host "Opcion invalida." -ForegroundColor Red }
     }
-    if ($op.ToUpper() -ne "S") { Read-Host "`nENTER para continuar" | Out-Null }
+    if ($op.ToUpper() -ne "S") {
+        Read-Host "`nENTER para continuar" | Out-Null
+    }
 } while ($op.ToUpper() -ne "S")
