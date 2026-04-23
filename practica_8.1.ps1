@@ -162,54 +162,75 @@ function Configurar-Carpetas {
 
     $dominio = "reprobados"
 
-    function Add-Permiso {
+    function Nueva-Regla {
         param(
-            [string]$Path,
-            [string]$Account,
-            [string]$Rights
+            [string]$Cuenta,
+            [string]$Permiso
+        )
+        return New-Object System.Security.AccessControl.FileSystemAccessRule(
+            $Cuenta,
+            $Permiso,
+            "ContainerInherit,ObjectInherit",
+            "None",
+            "Allow"
+        )
+    }
+
+    function Add-Permisos-Seguros {
+        param(
+            [string]$Ruta,
+            [string[]]$CuentasModificar
         )
 
-        $acl = Get-Acl $Path
+        $acl = New-Object System.Security.AccessControl.DirectorySecurity
         $acl.SetAccessRuleProtection($true, $false)
 
-        $ruleAdmin = New-Object System.Security.AccessControl.FileSystemAccessRule(
-            "BUILTIN\Administrators",
-            "FullControl",
-            "ContainerInherit,ObjectInherit",
-            "None",
-            "Allow"
-        )
+        # SIDs robustos para evitar problemas de traducción
+        $sidAdmins = New-Object System.Security.Principal.SecurityIdentifier("S-1-5-32-544")
+        $sidSystem = New-Object System.Security.Principal.SecurityIdentifier("S-1-5-18")
 
-        $ruleCuenta = New-Object System.Security.AccessControl.FileSystemAccessRule(
-            $Account,
-            $Rights,
-            "ContainerInherit,ObjectInherit",
-            "None",
-            "Allow"
-        )
+        $cuentaAdmins = $sidAdmins.Translate([System.Security.Principal.NTAccount]).Value
+        $cuentaSystem = $sidSystem.Translate([System.Security.Principal.NTAccount]).Value
 
-        $acl.AddAccessRule($ruleAdmin)
-        $acl.AddAccessRule($ruleCuenta)
-        Set-Acl -Path $Path -AclObject $acl
+        $acl.AddAccessRule((Nueva-Regla -Cuenta $cuentaAdmins -Permiso "FullControl"))
+        $acl.AddAccessRule((Nueva-Regla -Cuenta $cuentaSystem -Permiso "FullControl"))
+
+        foreach ($cuenta in $CuentasModificar) {
+            try {
+                $nt = New-Object System.Security.Principal.NTAccount($cuenta)
+                $null = $nt.Translate([System.Security.Principal.SecurityIdentifier])
+                $acl.AddAccessRule((Nueva-Regla -Cuenta $cuenta -Permiso "Modify"))
+                Write-Host "  [OK] Permiso agregado a $cuenta en $Ruta" -ForegroundColor Green
+            }
+            catch {
+                Write-Host "  [WARN] No se pudo traducir la cuenta: $cuenta" -ForegroundColor Yellow
+            }
+        }
+
+        Set-Acl -Path $Ruta -AclObject $acl
     }
 
     foreach ($dep in @("Cuates","NoCuates")) {
         $rutaDep = Join-Path $RutaRaiz $dep
         $rutaGeneral = Join-Path $rutaDep "General"
 
+        New-Item -ItemType Directory -Path $rutaDep -Force | Out-Null
         New-Item -ItemType Directory -Path $rutaGeneral -Force | Out-Null
 
-        $grupo = if ($dep -eq "Cuates") { "Grupo_Cuates" } else { "Grupo_NoCuates" }
-        Add-Permiso -Path $rutaDep -Account "$dominio\$grupo" -Rights "Modify"
+        $grupo = if ($dep -eq "Cuates") { "$dominio\Grupo_Cuates" } else { "$dominio\Grupo_NoCuates" }
+
+        Add-Permisos-Seguros -Ruta $rutaDep -CuentasModificar @($grupo)
+        Add-Permisos-Seguros -Ruta $rutaGeneral -CuentasModificar @($grupo)
     }
 
     foreach ($u in (Import-Csv $RutaCSV)) {
         $usuario = $u.usuario.Trim()
         $dep = $u.departamento.Trim() -replace " ",""
         $rutaPrivada = Join-Path $RutaRaiz "$dep\$usuario"
+        $cuentaUsuario = "$dominio\$usuario"
 
         New-Item -ItemType Directory -Path $rutaPrivada -Force | Out-Null
-        Add-Permiso -Path $rutaPrivada -Account "$dominio\$usuario" -Rights "Modify"
+        Add-Permisos-Seguros -Ruta $rutaPrivada -CuentasModificar @($cuentaUsuario)
     }
 
     Write-Host "[OK] Carpetas y permisos listos" -ForegroundColor Green
