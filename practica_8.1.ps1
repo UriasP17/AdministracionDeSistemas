@@ -159,8 +159,39 @@ function Importar-UsuariosCSV {
 
 function Configurar-Carpetas {
     Write-Host "[4] Creando carpetas y permisos..." -ForegroundColor Cyan
-    $servidor = "localhost"
-    $dominio = (Get-ADDomain -Server $servidor).NetBIOSName
+
+    $dominio = "reprobados"
+
+    function Add-Permiso {
+        param(
+            [string]$Path,
+            [string]$Account,
+            [string]$Rights
+        )
+
+        $acl = Get-Acl $Path
+        $acl.SetAccessRuleProtection($true, $false)
+
+        $ruleAdmin = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            "BUILTIN\Administrators",
+            "FullControl",
+            "ContainerInherit,ObjectInherit",
+            "None",
+            "Allow"
+        )
+
+        $ruleCuenta = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            $Account,
+            $Rights,
+            "ContainerInherit,ObjectInherit",
+            "None",
+            "Allow"
+        )
+
+        $acl.AddAccessRule($ruleAdmin)
+        $acl.AddAccessRule($ruleCuenta)
+        Set-Acl -Path $Path -AclObject $acl
+    }
 
     foreach ($dep in @("Cuates","NoCuates")) {
         $rutaDep = Join-Path $RutaRaiz $dep
@@ -168,11 +199,8 @@ function Configurar-Carpetas {
 
         New-Item -ItemType Directory -Path $rutaGeneral -Force | Out-Null
 
-        $acl = Get-Acl $rutaDep
-        $acl.SetAccessRuleProtection($true,$false)
-        $acl.SetAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule("Administrators","FullControl","ContainerInherit,ObjectInherit","None","Allow")))
-        $acl.SetAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule("$dominio\Grupo_$dep","Modify","ContainerInherit,ObjectInherit","None","Allow")))
-        Set-Acl $rutaDep $acl
+        $grupo = if ($dep -eq "Cuates") { "Grupo_Cuates" } else { "Grupo_NoCuates" }
+        Add-Permiso -Path $rutaDep -Account "$dominio\$grupo" -Rights "Modify"
     }
 
     foreach ($u in (Import-Csv $RutaCSV)) {
@@ -181,17 +209,11 @@ function Configurar-Carpetas {
         $rutaPrivada = Join-Path $RutaRaiz "$dep\$usuario"
 
         New-Item -ItemType Directory -Path $rutaPrivada -Force | Out-Null
-
-        $acl = Get-Acl $rutaPrivada
-        $acl.SetAccessRuleProtection($true,$false)
-        $acl.SetAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule("Administrators","FullControl","ContainerInherit,ObjectInherit","None","Allow")))
-        $acl.SetAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule("$dominio\$usuario","Modify","ContainerInherit,ObjectInherit","None","Allow")))
-        Set-Acl $rutaPrivada $acl
+        Add-Permiso -Path $rutaPrivada -Account "$dominio\$usuario" -Rights "Modify"
     }
 
     Write-Host "[OK] Carpetas y permisos listos" -ForegroundColor Green
 }
-
 function Configurar-GPOLogoff {
     Write-Host "[5] Configurando GPO cierre forzado..." -ForegroundColor Cyan
     $servidor = "localhost"
