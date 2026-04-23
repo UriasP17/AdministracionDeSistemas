@@ -51,21 +51,25 @@ function Instalar-Requisitos {
 
 function Crear-EstructuraAD {
     Write-Host "[2] Creando OUs y grupos..." -ForegroundColor Cyan
-    $dominioDN = (Get-ADDomain).DistinguishedName
+
+    $servidor = "localhost"
+
+    $dominioObj = Get-ADDomain -Server $servidor
+    $dominioDN = $dominioObj.DistinguishedName
 
     foreach ($ou in @("Cuates","No Cuates")) {
-        if (-not (Get-ADOrganizationalUnit -Filter "Name -eq '$ou'" -ErrorAction SilentlyContinue)) {
-            New-ADOrganizationalUnit -Name $ou -Path $dominioDN -ProtectedFromAccidentalDeletion $false
+        if (-not (Get-ADOrganizationalUnit -Filter "Name -eq '$ou'" -Server $servidor -ErrorAction SilentlyContinue)) {
+            New-ADOrganizationalUnit -Name $ou -Path $dominioDN -ProtectedFromAccidentalDeletion $false -Server $servidor
             Write-Host "OU creada: $ou" -ForegroundColor Green
         }
     }
 
-    if (-not (Get-ADGroup -Filter "Name -eq 'Grupo_Cuates'" -ErrorAction SilentlyContinue)) {
-        New-ADGroup -Name "Grupo_Cuates" -GroupScope Global -GroupCategory Security -Path "OU=Cuates,$dominioDN"
+    if (-not (Get-ADGroup -Filter "Name -eq 'Grupo_Cuates'" -Server $servidor -ErrorAction SilentlyContinue)) {
+        New-ADGroup -Name "Grupo_Cuates" -GroupScope Global -GroupCategory Security -Path "OU=Cuates,$dominioDN" -Server $servidor
     }
 
-    if (-not (Get-ADGroup -Filter "Name -eq 'Grupo_NoCuates'" -ErrorAction SilentlyContinue)) {
-        New-ADGroup -Name "Grupo_NoCuates" -GroupScope Global -GroupCategory Security -Path "OU=No Cuates,$dominioDN"
+    if (-not (Get-ADGroup -Filter "Name -eq 'Grupo_NoCuates'" -Server $servidor -ErrorAction SilentlyContinue)) {
+        New-ADGroup -Name "Grupo_NoCuates" -GroupScope Global -GroupCategory Security -Path "OU=No Cuates,$dominioDN" -Server $servidor
     }
 
     Write-Host "[OK] OUs y grupos creados" -ForegroundColor Green
@@ -106,8 +110,10 @@ function Importar-UsuariosCSV {
     Write-Host "[3] Importando usuarios..." -ForegroundColor Cyan
     if (-not (Validar-CSV)) { return }
 
-    $dominioDN = (Get-ADDomain).DistinguishedName
-    $forest = (Get-ADDomain).Forest
+    $servidor = "localhost"
+    $dominioObj = Get-ADDomain -Server $servidor
+    $dominioDN = $dominioObj.DistinguishedName
+    $forest = $dominioObj.DNSRoot
     [byte[]]$horasCuates = Crear-HorarioBytes -Inicio 8 -Fin 15
     [byte[]]$horasNoCuates = Crear-HorarioBytes -Inicio 15 -Fin 2
 
@@ -129,8 +135,8 @@ function Importar-UsuariosCSV {
 
         $securePass = ConvertTo-SecureString $pass -AsPlainText -Force
 
-        if (Get-ADUser -Filter "SamAccountName -eq '$usuario'" -ErrorAction SilentlyContinue) {
-            Remove-ADUser -Identity $usuario -Confirm:$false
+        if (Get-ADUser -Filter "SamAccountName -eq '$usuario'" -Server $servidor -ErrorAction SilentlyContinue) {
+            Remove-ADUser -Identity $usuario -Server $servidor -Confirm:$false
             Start-Sleep -Milliseconds 500
         }
 
@@ -141,10 +147,11 @@ function Importar-UsuariosCSV {
             -AccountPassword $securePass `
             -Enabled $true `
             -Path $ouPath `
-            -PasswordNeverExpires $true
+            -PasswordNeverExpires $true `
+            -Server $servidor
 
-        Set-ADUser -Identity $usuario -Replace @{logonhours = [byte[]]$horario}
-        Add-ADGroupMember -Identity $grupo -Members $usuario
+        Set-ADUser -Identity $usuario -Replace @{logonhours = [byte[]]$horario} -Server $servidor
+        Add-ADGroupMember -Identity $grupo -Members $usuario -Server $servidor
 
         Write-Host "Usuario creado: $usuario -> $depto" -ForegroundColor Green
     }
@@ -152,7 +159,8 @@ function Importar-UsuariosCSV {
 
 function Configurar-Carpetas {
     Write-Host "[4] Creando carpetas y permisos..." -ForegroundColor Cyan
-    $dominio = (Get-ADDomain).NetBIOSName
+    $servidor = "localhost"
+    $dominio = (Get-ADDomain -Server $servidor).NetBIOSName
 
     foreach ($dep in @("Cuates","NoCuates")) {
         $rutaDep = Join-Path $RutaRaiz $dep
@@ -186,7 +194,8 @@ function Configurar-Carpetas {
 
 function Configurar-GPOLogoff {
     Write-Host "[5] Configurando GPO cierre forzado..." -ForegroundColor Cyan
-    $dominioDN = (Get-ADDomain).DistinguishedName
+    $servidor = "localhost"
+    $dominioDN = (Get-ADDomain -Server $servidor).DistinguishedName
     $gpoName = "Practica8_CierreForzado"
 
     if (-not (Get-GPO -Name $gpoName -ErrorAction SilentlyContinue)) {
